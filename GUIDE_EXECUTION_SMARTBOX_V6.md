@@ -136,11 +136,11 @@ Produit un rapport console. Aucun effet de bord.
 
 Crée la structure de configuration minimale V6 dans la base existante :
 
-- Schémas `cfg`, `log`, `stg`, `dic`, `load`, `tbx`, `tbx_fr`, `tbx_master`, `ProjectData`, `review`, `report`
+- Schémas `cfg`, `log`, `stg`, `dic`, `tbx`, `tbx_fr`, `tbx_master`, `ProjectData`, `review`, `report`
 - Table `cfg.Settings` et ses paramètres (ContentDbName, PwaId, PwaLanguage, etc.)
 - Table `cfg.PWA` (définition de l'instance Project Web App)
 - Procédure `log.usp_WriteScriptLog` et table `log.ScriptExecutionLog`
-- Tables de chargement `load.*` (load.ProjectDataFields, load.ProjectServerLookupEntries, load.ProjectDataAlias)
+- Tables d'import `stg.import_*` (stg.import_dictionary_od_fields, stg.import_dictionary_lookup_entries, stg.import_dictionary_projectdata_alias)
 
 > **À personnaliser avant exécution :** rechercher `PARAMETRES CLIENT` dans le script (Ctrl+F) et ajuster `@ContentDbName`, `@PwaUrl`, `@PwaLanguage` selon le client.
 
@@ -197,7 +197,7 @@ Crée les vues internes depuis un snapshot figé des définitions PSSE :
 - Vues `tbx.*` (couche interne, alias anglais)
 - Vues `tbx_fr.*` (couche interne, alias français)
 - Vues `tbx_master.*` (couche consolidée)
-- Vues `ProjectData.*` (couche publique, contrat OData — noms anglais)
+- Vues `ProjectData.*` (couche publique, nom FR si `cfg.PWA.Language = 'FR'`, sinon nom EN)
 
 Les vues utilisent les synonymes `src_*` créés à l'étape 2. Elles ne dépendent pas de `SP_SPR_POC_Contenu` au runtime — toute la résolution passe par les synonymes.
 
@@ -413,7 +413,7 @@ ORDER BY CoverageScore DESC;
 
 Génère dynamiquement toutes les vues depuis `dic.EntityColumnPublication` :
 
-- `ProjectData.<EntityName>` — vues publiques (contrat OData, noms anglais, langue pilotée par `cfg.PWA.Language`)
+- `ProjectData.<EntityName>` — vues publiques (nom FR si `cfg.PWA.Language = 'FR'`, sinon nom EN)
 - `tbx.<EntityName>` — couche interne avec alias anglais
 - `tbx_fr.<EntityName>` — couche interne avec alias français
 
@@ -435,8 +435,9 @@ FROM sys.views
 WHERE SCHEMA_NAME(schema_id) IN ('ProjectData','tbx','tbx_fr')
 GROUP BY SCHEMA_NAME(schema_id);
 
--- Tester une vue
-SELECT TOP 5 * FROM ProjectData.Projects;
+-- Tester une vue (adapter le nom selon cfg.PWA.Language)
+SELECT TOP 5 * FROM ProjectData.Projets;   -- tenant FR
+SELECT TOP 5 * FROM ProjectData.Projects;  -- tenant EN
 ```
 
 ---
@@ -451,13 +452,14 @@ Pour réinitialiser l'environnement sans supprimer la base ni les paramètres `c
 Le script supprime :
 - Toutes les vues générées (`ProjectData.*`, `tbx.*`, `tbx_fr.*`, `tbx_master.*`)
 - Tous les synonymes `src_*`
-- Le contenu des tables `stg.*`, `dic.*`, `load.*`, `review.*`, `report.*`
+- Toutes les tables de travail `stg.*`, `dic.*`, `review.*`, `report.*`, `log.*`
+- Toutes les tables `cfg.*` sauf `cfg.Settings` et `cfg.PWA`
 
 Il **conserve** par défaut :
 - `cfg.Settings` et `cfg.PWA` (configuration client)
-- `log.ScriptExecutionLog` (historique d'exécution)
+- aucune autre table de travail
 
-Après la remise à zéro, reprendre à l'**étape 2**.
+Après la remise à zéro, reprendre à l'**étape 1** si tu veux réappliquer la configuration, sinon à l'**étape 2** si `cfg.Settings` et `cfg.PWA` sont déjà correctes.
 
 ---
 

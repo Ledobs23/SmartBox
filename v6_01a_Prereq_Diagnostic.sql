@@ -128,9 +128,14 @@ VALUES
 (
     80,
     N'OBJECTS',
-    N'load.*',
-    CASE WHEN SCHEMA_ID(N'load') IS NOT NULL THEN N'OK' ELSE N'INFO' END,
-    N'Schema des tables d entree jour 1.',
+    N'stg.import_dictionary_*',
+    CASE
+        WHEN OBJECT_ID(N'stg.import_dictionary_od_fields', N'U') IS NOT NULL
+         AND OBJECT_ID(N'stg.import_dictionary_lookup_entries', N'U') IS NOT NULL
+         AND OBJECT_ID(N'stg.import_dictionary_projectdata_alias', N'U') IS NOT NULL
+        THEN N'OK' ELSE N'INFO'
+    END,
+    N'Tables de staging pour l''import du dictionnaire jour 1.',
     N'Si absent, executer v6_03a_Create_Foundations.sql.',
     0
 );

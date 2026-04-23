@@ -3,7 +3,7 @@
     Projet      : SmartBox
     Phase       : 05a - Dictionnaire et mapping OData/PSSE
     Role        : Creer les tables cfg.dictionary_*, dic.*, stg.quality et alimenter le pipeline
-                  de mapping OData <-> PSSE depuis stg.import_dictionary_* ou load.*.
+                  de mapping OData <-> PSSE depuis stg.import_dictionary_*.
 
     Notes V6
     - Aucune dependance a xp_cmdshell.

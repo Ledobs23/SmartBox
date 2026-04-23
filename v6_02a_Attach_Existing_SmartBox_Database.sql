@@ -176,8 +176,8 @@ DECLARE @ProjectSchemasCsv nvarchar(200) = N'pjrep,pjpub';       -- Schemas nati
 DECLARE @ViewDefinitionMode nvarchar(40) = N'FROZEN_SNAPSHOT';
 DECLARE @FrozenViewSnapshotName nvarchar(260) = N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql';
 DECLARE @ExcludePsseContentCustomFields bit = 1;                 -- 1 = ne pas publier les champs personnalises du content PSSE.
-DECLARE @LoadMode nvarchar(40) = N'LOAD_TABLES';                 -- Les extractions client passent par load.*.
-DECLARE @Day1LoadSourceMode nvarchar(30) = N'TOOL';              -- TOOL ou DBA_CSV pour le chargement initial.
+DECLARE @LoadMode nvarchar(40) = N'STG_IMPORT_TABLES';           -- Les imports dictionnaire passent par stg.import_*.
+DECLARE @Day1LoadSourceMode nvarchar(30) = N'TOOL';              -- TOOL ou DBA_CSV pour le chargement initial vers stg.import_*.
 DECLARE @AllowCsvDay1Import nvarchar(20) = N'OPTIONAL';          -- CSV permis seulement au jour 1 si le DBA le choisit.
 DECLARE @ReviewMode nvarchar(30) = N'TABLES';                    -- Les corrections passent par review.*.
 DECLARE @ReportMode nvarchar(30) = N'TABLES';                    -- Les rapports sont persistés dans report.*.
@@ -231,11 +231,11 @@ USING
     UNION ALL SELECT N'PwaId', CONVERT(nvarchar(4000), @PwaId), N'PWA', N'int', 1, 0, 0, N'Identifiant PWA logique. La trousse courante supporte une PWA active.'
     UNION ALL SELECT N'PwaLanguage', CONVERT(nvarchar(4000), @PwaLanguage), N'PWA', N'nvarchar(10)', 1, 0, 0, N'Langue principale de publication.'
     UNION ALL SELECT N'ProjectSchemasCsv', CONVERT(nvarchar(4000), @ProjectSchemasCsv), N'PWA', N'csv(sysname)', 1, 0, 0, N'Schemas PSSE sources separes par virgule.'
-    UNION ALL SELECT N'LoadMode', CONVERT(nvarchar(4000), @LoadMode), N'MODE', N'nvarchar(40)', 1, 0, 0, N'Mode V6: les extractions sont lues depuis load.*.'
-    UNION ALL SELECT N'AllowCsvDay1Import', CONVERT(nvarchar(4000), @AllowCsvDay1Import), N'MODE', N'nvarchar(20)', 0, 0, 0, N'Autorise un chargement CSV initial par DBA vers load.*, hors pipeline courant.'
-    UNION ALL SELECT N'Day1LoadSourceMode', CONVERT(nvarchar(4000), @Day1LoadSourceMode), N'LOAD', N'nvarchar(30)', 0, 0, 0, N'Source attendue pour les tables load.*: TOOL ou DBA_CSV.'
-    UNION ALL SELECT N'ActiveLoadBatchId', N'', N'LOAD', N'bigint_nullable', 0, 0, 0, N'Lot load.* a consommer. Vide = dernier lot valide.'
-    UNION ALL SELECT N'RequireLoadBatchValidation', N'1', N'LOAD', N'bit', 1, 0, 0, N'Exige une validation du lot de chargement avant consommation.'
+    UNION ALL SELECT N'LoadMode', CONVERT(nvarchar(4000), @LoadMode), N'MODE', N'nvarchar(40)', 1, 0, 0, N'Mode V6: les imports dictionnaire transitent par stg.import_dictionary_*.'
+    UNION ALL SELECT N'AllowCsvDay1Import', CONVERT(nvarchar(4000), @AllowCsvDay1Import), N'MODE', N'nvarchar(20)', 0, 0, 0, N'Autorise un chargement CSV initial par DBA vers stg.import_dictionary_*, hors pipeline courant.'
+    UNION ALL SELECT N'Day1LoadSourceMode', CONVERT(nvarchar(4000), @Day1LoadSourceMode), N'LOAD', N'nvarchar(30)', 0, 0, 0, N'Source attendue pour les tables stg.import_dictionary_*: TOOL ou DBA_CSV.'
+    UNION ALL SELECT N'ActiveLoadBatchId', N'', N'LOAD', N'bigint_nullable', 0, 0, 1, N'Legacy V5/V6 initial: lot load.* a consommer. Non utilise dans la filiere stg.import_dictionary_*.'
+    UNION ALL SELECT N'RequireLoadBatchValidation', N'1', N'LOAD', N'bit', 1, 0, 1, N'Legacy V5/V6 initial: validation du lot load.*. Non utilise dans la filiere stg.import_dictionary_*.'
     UNION ALL SELECT N'ReviewMode', CONVERT(nvarchar(4000), @ReviewMode), N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les corrections passent par review.*, pas par CSV.'
     UNION ALL SELECT N'ReportMode', CONVERT(nvarchar(4000), @ReportMode), N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les rapports sont persistés dans report.*.'
     UNION ALL SELECT N'LogMode', N'LOG_SCHEMA', N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les logs sont ecrits dans log.ScriptExecutionLog.'
@@ -260,11 +260,11 @@ USING
     UNION ALL SELECT N'SmartBoxImportPath', N'', N'LEGACY', N'nvarchar(4000)', 0, 0, 1, N'Legacy V5: alias de chemin import. Non requis par V6 normal.'
     UNION ALL SELECT N'SmartBoxErrorPath', N'', N'LEGACY', N'nvarchar(4000)', 0, 0, 1, N'Legacy V5: chemin des exports. Remplace par log.* et report.*.'
     UNION ALL SELECT N'DictionarySourcePath', N'', N'LOAD', N'nvarchar(4000)', 0, 0, 0, N'Chemin local (client) contenant les fichiers CSV du dictionnaire pour chargement SqlBulkCopy.'
-    UNION ALL SELECT N'DictionaryFile_ProjectData', N'Fields_ProjectData_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export OData ProjectData. Charge dans load.ProjectDataFields.'
-    UNION ALL SELECT N'DictionaryFile_Lookups', N'Lookups_ProjectServer_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export lookups. Charge dans load.ProjectServerLookupEntries.'
-    UNION ALL SELECT N'DictionaryFile_ProjectDataAlias', N'ProjectData_Alias.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV alias bilingue OData. Charge dans load.ProjectDataAlias.'
-    UNION ALL SELECT N'ImportCsvToLoadTables', N'1', N'LOAD', N'bit', 0, 0, 0, N'1 = utiliser SqlBulkCopy pour charger les CSV dans les tables load.*.'
-    UNION ALL SELECT N'TruncateLoadTablesBeforeCsvImport', N'1', N'LOAD', N'bit', 0, 0, 0, N'1 = tronquer les tables load.* avant chargement CSV.'
+    UNION ALL SELECT N'DictionaryFile_ProjectData', N'Fields_ProjectData_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export OData ProjectData. Charge dans stg.import_dictionary_od_fields.'
+    UNION ALL SELECT N'DictionaryFile_Lookups', N'Lookups_ProjectServer_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export lookups. Charge dans stg.import_dictionary_lookup_entries.'
+    UNION ALL SELECT N'DictionaryFile_ProjectDataAlias', N'ProjectData_Alias.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV alias bilingue OData. Charge dans stg.import_dictionary_projectdata_alias.'
+    UNION ALL SELECT N'ImportCsvToLoadTables', N'1', N'LOAD', N'bit', 0, 0, 1, N'Legacy libelle: 1 = utiliser SqlBulkCopy pour charger les CSV dans stg.import_dictionary_*.'
+    UNION ALL SELECT N'TruncateLoadTablesBeforeCsvImport', N'1', N'LOAD', N'bit', 0, 0, 0, N'1 = tronquer les tables stg.import_dictionary_* avant chargement CSV.'
     UNION ALL SELECT N'Language', CONVERT(nvarchar(4000), @PwaLanguage), N'LEGACY', N'nvarchar(10)', 0, 0, 1, N'Legacy V5: utiliser PwaLanguage en V6.'
 ) AS S
     ON S.SettingKey = T.SettingKey

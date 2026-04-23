@@ -2,10 +2,10 @@
     v6_01a_Prereq_Diagnostic.sql
     Projet      : SmartBox
     Phase       : 01a - Diagnostic V6 pour base existante
-    Role        : Verifier les prerequis applicatifs sans exiger CREATE DATABASE, xp_cmdshell ou acces fichiers.
+    Role        : Verifier les prérequis applicatifs sans exiger CREATE DATABASE, xp_cmdshell ou accès fichiers.
 
     Notes V6
-    - La base SmartBox est supposee deja creee par le client.
+    - La base SmartBox est supposee déjà créée par le client.
     - xp_cmdshell est diagnostique mais non requis.
     - BULK INSERT est diagnostique seulement pour le chargement DBA optionnel du jour 1.
 =====================================================================================================================*/
@@ -14,7 +14,7 @@ GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 61001, N'Executer ce diagnostic dans la base SmartBox cible existante, pas dans une base systeme.', 1;
+    THROW 61001, N'Exécuter ce diagnostic dans la base SmartBox cible existante, pas dans une base systeme.', 1;
 END;
 
 DECLARE @MinCompatibilityLevel int = 140;
@@ -77,7 +77,7 @@ VALUES
     CONCAT(N'CompatibilityLevel=', @DbCompatibilityLevel, N' | Minimum=', @MinCompatibilityLevel),
     CASE WHEN @DbCompatibilityLevel >= @MinCompatibilityLevel
          THEN N'Aucune.'
-         ELSE N'Augmenter le compatibility level avant execution de la trousse V6.' END,
+         ELSE N'Augmenter le compatibility level avant exécution de la trousse V6.' END,
     CASE WHEN @DbCompatibilityLevel >= @MinCompatibilityLevel THEN 0 ELSE 1 END
 ),
 (
@@ -86,7 +86,7 @@ VALUES
     N'CREATE/ALTER objets applicatifs',
     CASE WHEN HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'CREATE TABLE') = 1 THEN N'OK' ELSE N'BLOCKING' END,
     CONCAT(N'Login=', SUSER_SNAME()),
-    N'Le compte de deploiement doit pouvoir creer schemas, tables, vues et procedures dans la base cible.',
+    N'Le compte de déploiement doit pouvoir créer schémas, tables, vues et procédures dans la base cible.',
     CASE WHEN HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'CREATE TABLE') = 1 THEN 0 ELSE 1 END
 ),
 (
@@ -113,7 +113,7 @@ VALUES
     N'cfg.Settings',
     CASE WHEN OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL THEN N'OK' ELSE N'INFO' END,
     N'Configuration SmartBox.',
-    N'Si absent, executer v6_02a_Attach_Existing_SmartBox_Database.sql.',
+    N'Si absent, exécuter v6_02a_Attach_Existing_SmartBox_Database.sql.',
     0
 ),
 (
@@ -122,7 +122,7 @@ VALUES
     N'log.ScriptExecutionLog',
     CASE WHEN OBJECT_ID(N'log.ScriptExecutionLog', N'U') IS NOT NULL THEN N'OK' ELSE N'INFO' END,
     N'Journal applicatif V6.',
-    N'Si absent, executer v6_02a puis v6_03a.',
+    N'Si absent, exécuter v6_02a puis v6_03a.',
     0
 ),
 (
@@ -136,7 +136,7 @@ VALUES
         THEN N'OK' ELSE N'INFO'
     END,
     N'Tables de staging pour l''import du dictionnaire jour 1.',
-    N'Si absent, executer v6_03a_Create_Foundations.sql.',
+    N'Si absent, exécuter v6_03a_Create_Foundations.sql.',
     0
 );
 
@@ -152,8 +152,8 @@ ORDER BY CheckOrder;
 
 IF EXISTS (SELECT 1 FROM @Result WHERE IsBlocking = 1)
 BEGIN
-    THROW 61002, N'Diagnostic V6 bloque. Corriger les controles BLOCKING avant de poursuivre.', 1;
+    THROW 61002, N'Diagnostic V6 bloque. Corriger les contrôles BLOCKING avant de poursuivre.', 1;
 END;
 
-PRINT N'Diagnostic V6 termine sans blocage.';
+PRINT N'Diagnostic V6 terminé sans blocage.';
 GO

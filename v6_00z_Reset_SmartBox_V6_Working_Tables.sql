@@ -3,25 +3,25 @@
     Projet      : SmartBox
     Phase       : 00z - Remise a zero avant de rejouer le pipeline
 
-    Comportement par defaut
+    Comportement par défaut
     -------------------------------------------------------
     DROP TABLE de TOUTES les tables de la base, sauf cfg.PWA et cfg.Settings.
     Cela permet de rejouer le pipeline complet 02a -> 07a sur une base propre.
     cfg.PWA et cfg.Settings contiennent la configuration du tenant : ils sont
-    TOUJOURS preserves afin que v6_02a puisse appliquer ses MERGE sans ressaisie.
+    TOUJOURS préservés afin que v6_02a puisse appliquer ses MERGE sans ressaisie.
 
-    Vues ProjectData / tbx / tbx_fr / tbx_master   : toujours supprimees.
-    Synonymes src_*                                  : toujours supprimes.
-    log.ScriptExecutionLog et toutes les autres tables : supprimees.
+    Vues ProjectData / tbx / tbx_fr / tbx_master   : toujours supprimées.
+    Synonymes src_*                                  : toujours supprimés.
+    log.ScriptExecutionLog et toutes les autres tables : supprimées.
 
-    Schemas touches par le nettoyage
+    Schémas touches par le nettoyage
     -------------------------------------------------------
     stg | dic | load | review | report | log | cfg (hors PWA et Settings)
 
     Pour vider aussi cfg.PWA et cfg.Settings (reinstallation complete)
     -------------------------------------------------------
     Mettre @ClearSettings = 1  ET  @AllowClearProtectedConfig = 1.
-    Ne jamais activer ces flags sans etre certain de vouloir ressaisir
+    Ne jamais activer ces flags sans être certain de vouloir ressaisir
     toute la configuration dans v6_02a.
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -29,7 +29,7 @@ SET XACT_ABORT ON;
 GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
-    THROW 60001, N'Executer ce script dans la base SmartBox cible, normalement SPR.', 1;
+    THROW 60001, N'Exécuter ce script dans la base SmartBox cible, normalement SPR.', 1;
 GO
 
 /*=====================================================================================================================
@@ -37,7 +37,7 @@ GO
 =====================================================================================================================*/
 DECLARE @ExpectedDatabaseName      sysname = N'SPR';
 
-/* --- Zones protegees (double confirmation requise) --- */
+/* --- Zones protégées (double confirmation requise) --- */
 DECLARE @ClearSettings             bit = 0;   -- 1 = supprime aussi cfg.Settings et cfg.PWA
 DECLARE @AllowClearProtectedConfig bit = 0;   -- Mettre a 1 pour confirmer @ClearSettings
 
@@ -48,7 +48,7 @@ DECLARE @Sql  nvarchar(max);
 DECLARE @Cnt  int;
 
 IF DB_NAME() <> @ExpectedDatabaseName
-    THROW 60002, N'La base courante ne correspond pas a @ExpectedDatabaseName. Modifier le parametre.', 1;
+    THROW 60002, N'La base courante ne correspond pas a @ExpectedDatabaseName. Modifier le paramètre.', 1;
 
 IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 0
     THROW 60003, N'ClearSettings demande. Mettre @AllowClearProtectedConfig = 1 pour confirmer.', 1;
@@ -57,7 +57,7 @@ PRINT N'=== SmartBox V6 reset START ===';
 PRINT N'Database=' + DB_NAME();
 
 /* ===========================================================================================
-   1. Vues generees (ProjectData / tbx / tbx_fr / tbx_master)
+   1. Vues générées (ProjectData / tbx / tbx_fr / tbx_master)
    =========================================================================================== */
 SELECT @Sql = STRING_AGG(
     CONVERT(nvarchar(max),
@@ -76,7 +76,7 @@ BEGIN
     SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP VIEW', N''))) / LEN(N'DROP VIEW');
     EXEC sys.sp_executesql @Sql;
 END;
-PRINT N'[1] Vues supprimees : ' + CAST(@Cnt AS nvarchar) + N'.';
+PRINT N'[1] Vues supprimées : ' + CAST(@Cnt AS nvarchar) + N'.';
 SET @Sql = NULL;
 
 /* ===========================================================================================
@@ -97,12 +97,12 @@ BEGIN
     SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP SYNONYM', N''))) / LEN(N'DROP SYNONYM');
     EXEC sys.sp_executesql @Sql;
 END;
-PRINT N'[2] Synonymes supprimes : ' + CAST(@Cnt AS nvarchar) + N'.';
+PRINT N'[2] Synonymes supprimés : ' + CAST(@Cnt AS nvarchar) + N'.';
 SET @Sql = NULL;
 
 /* ===========================================================================================
    3. Toutes les tables de travail
-   Schemas : stg | dic | load | review | report | log
+   Schémas : stg | dic | load | review | report | log
              cfg  (toutes sauf cfg.PWA et cfg.Settings)
    Approche dynamique : interroge sys.tables -> aucune liste a maintenir.
    Ordre : les tables avec FK enfants en premier (cfg.PwaSchemaScope avant cfg.PWA).
@@ -138,21 +138,21 @@ BEGIN
     SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP TABLE', N''))) / LEN(N'DROP TABLE');
     EXEC sys.sp_executesql @Sql;
 END;
-PRINT N'[3] Tables de travail supprimees (stg/dic/load/review/report/log/cfg hors PWA+Settings) : '
+PRINT N'[3] Tables de travail supprimées (stg/dic/load/review/report/log/cfg hors PWA+Settings) : '
       + CAST(@Cnt AS nvarchar) + N'.';
 SET @Sql = NULL;
 
 /* ===========================================================================================
-   4. cfg.Settings et cfg.PWA (double securite uniquement)
+   4. cfg.Settings et cfg.PWA (double sécurité uniquement)
    =========================================================================================== */
 IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 1
 BEGIN
     IF OBJECT_ID(N'cfg.PWA',      N'U') IS NOT NULL DROP TABLE cfg.PWA;
     IF OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL DROP TABLE cfg.Settings;
-    PRINT N'[4] cfg.Settings et cfg.PWA supprimes (reinstallation complete).';
+    PRINT N'[4] cfg.Settings et cfg.PWA supprimés (reinstallation complete).';
 END
 ELSE
-    PRINT N'[4] cfg.Settings et cfg.PWA preserves.';
+    PRINT N'[4] cfg.Settings et cfg.PWA préservés.';
 
 /* ===========================================================================================
    5. Rapport final

@@ -2,13 +2,13 @@
     v6_04a_Create_Native_ProjectData_Views.sql
     Projet      : SmartBox
     Phase       : 04a - Vues ProjectData natives
-    Role        : Creer les vues OData-like ProjectOnline depuis un snapshot fige dans la trousse V6.
+    Role        : Créer les vues OData-like ProjectOnline depuis un snapshot fige dans la trousse V6.
 
     Notes V6
     - Ne depend plus de SP_SPR_POC_Contenu au runtime.
-    - Les couches internes tbx/tbx_fr/tbx_master sont integrees dans ce script pour execution SSMS directe.
-    - Les vues publiques ProjectData.* sont regenerees depuis tbx.vw_* en excluant les champs personnalises
-      presents dans la BD content PSSE. Les champs personnalises client seront ajoutes par une tranche ulterieure.
+    - Les couches internes tbx/tbx_fr/tbx_master sont intégrées dans ce script pour exécution SSMS directe.
+    - Les vues publiques ProjectData.* sont regénérées depuis tbx.vw_* en excluant les champs personnalisés
+      présents dans la BD content PSSE. Les champs personnalisés client seront ajoutés par une tranche ultérieure.
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -16,17 +16,17 @@ GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 66001, N'Executer ce script dans la base SmartBox cible.', 1;
+    THROW 66001, N'Exécuter ce script dans la base SmartBox cible.', 1;
 END;
 
 IF OBJECT_ID(N'cfg.Settings', N'U') IS NULL
-    THROW 66002, N'cfg.Settings absente. Executer v6_02a avant v6_04a.', 1;
+    THROW 66002, N'cfg.Settings absente. Exécuter v6_02a avant v6_04a.', 1;
 
 IF OBJECT_ID(N'log.usp_WriteScriptLog', N'P') IS NULL
-    THROW 66003, N'log.usp_WriteScriptLog absente. Executer v6_02a avant v6_04a.', 1;
+    THROW 66003, N'log.usp_WriteScriptLog absente. Exécuter v6_02a avant v6_04a.', 1;
 
 IF OBJECT_ID(N'src_pjrep.MSP_EpmProject_UserView', N'SN') IS NULL
-    THROW 66004, N'Synonyme src_pjrep.MSP_EpmProject_UserView absent. Executer v6_03a.', 1;
+    THROW 66004, N'Synonyme src_pjrep.MSP_EpmProject_UserView absent. Exécuter v6_03a.', 1;
 
 /* Correctif 5: valider que les synonymes src_* pointent vers cfg.Settings.ContentDbName. */
 IF NOT EXISTS
@@ -40,7 +40,7 @@ IF NOT EXISTS
            OR syn.base_object_name LIKE s.SettingValue + N'.%'
           )
 )
-    THROW 66005, N'Les synonymes src_* ne pointent pas vers cfg.Settings.ContentDbName. Rejouer v6_03a apres v6_02a.', 1;
+    THROW 66005, N'Les synonymes src_* ne pointent pas vers cfg.Settings.ContentDbName. Rejouer v6_03a après v6_02a.', 1;
 
 IF SCHEMA_ID(N'ProjectData') IS NULL EXEC(N'CREATE SCHEMA ProjectData AUTHORIZATION dbo;');
 IF SCHEMA_ID(N'tbx') IS NULL EXEC(N'CREATE SCHEMA tbx AUTHORIZATION dbo;');
@@ -90,7 +90,7 @@ IF @ViewDefinitionMode <> N'FROZEN_SNAPSHOT'
     THROW 66008, N'v6_04a supporte actuellement seulement cfg.Settings.ViewDefinitionMode = FROZEN_SNAPSHOT.', 1;
 
 IF @FrozenViewSnapshotName <> N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql'
-    THROW 66009, N'Le snapshot configure dans cfg.Settings.FrozenViewSnapshotName ne correspond pas au snapshot inclus dans v6_04a.', 1;
+    THROW 66009, N'Le snapshot configuré dans cfg.Settings.FrozenViewSnapshotName ne correspond pas au snapshot inclus dans v6_04a.', 1;
 
 EXEC log.usp_WriteScriptLog
     @RunId = @RunId,
@@ -99,7 +99,7 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'START',
     @Severity = N'INFO',
     @Status = N'STARTED',
-    @Message = N'Debut creation des vues natives depuis le snapshot fige V6.';
+    @Message = N'Début création des vues natives depuis le snapshot fige V6.';
 
 SELECT @DropSql = STRING_AGG
 (
@@ -130,7 +130,7 @@ GO
 /*=====================================================================================================================
     v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql
     Generated from SP_SPR_POC_Contenu on 2026-04-21.
-    Frozen internal view definitions for SmartBox V6.
+    Frozen internal view définitions for SmartBox V6.
     Do not edit manually; regenerate deliberately when the reference changes.
 =====================================================================================================================*/
 
@@ -4288,7 +4288,7 @@ WHERE target_schema.name = N'src_pjrep'
 
 SET @EndMessage = CONCAT
 (
-    N'Creation des vues natives terminee. ViewDefinitionMode=',
+    N'Création des vues natives terminée. ViewDefinitionMode=',
     @ViewDefinitionMode,
     N'; ExcludePsseContentCustomFields=',
     @ExcludePsseContentCustomFields,
@@ -4329,7 +4329,7 @@ BEGIN
 END;
 
 IF @ProjectDataCustomColumnCount > 0
-    THROW 66007, N'Des champs personnalises PSSE sont encore exposes dans ProjectData.', 1;
+    THROW 66007, N'Des champs personnalisés PSSE sont encore exposes dans ProjectData.', 1;
 
 SELECT
     @ViewDefinitionMode AS ViewDefinitionMode,

@@ -1,8 +1,8 @@
 /*
-    Diagnostic v6_07a — Affiche le SQL genere pour chaque entite en erreur.
-    Executer dans VS Code connecte a SPR.
-    Le SQL genere apparait dans l'onglet Messages (PRINT).
-    Tenter aussi une execution reelle et capturer l'erreur exacte.
+    Diagnostic v6_07a — Affiche le SQL génère pour chaque entité en erreur.
+    Exécuter dans VS Code connecté à SPR.
+    Le SQL génère apparait dans l'onglet Messages (PRINT).
+    Tenter aussi une exécution reelle et capturer l'erreur exacte.
 */
 SET NOCOUNT ON;
 
@@ -66,7 +66,7 @@ BEGIN
     PRINT N'===== ' + @EntityName + N' (' + ISNULL(@eb_obj, N'NO BINDING') + N') =====';
     PRINT @ViewSql;
 
-    /* Tenter l execution et capturer l erreur */
+    /* Tenter l exécution et capturer l erreur */
     BEGIN TRY
         EXEC sys.sp_executesql @ViewSql;
         PRINT N'>>> OK';
@@ -74,7 +74,7 @@ BEGIN
     BEGIN CATCH
         SET @ErrMsg = ERROR_MESSAGE();
         PRINT N'>>> ERREUR ' + CAST(ERROR_NUMBER() AS nvarchar) + N': ' + @ErrMsg;
-        /* Afficher les colonnes potentiellement problematiques pour cette entite */
+        /* Afficher les colonnes potentiellement problematiques pour cette entité */
         SELECT
             ecp.ColumnPosition,
             ecp.Column_EN,

@@ -2,43 +2,43 @@
     v6_03a_Create_Foundations.sql
     Projet      : SmartBox
     Phase       : 03a - Fondations V6
-    Role        : Creer les schemas, tables, inventaire PSSE et synonymes source requis par V6.
+    Role        : Créer les schémas, tables, inventaire PSSE et synonymes source requis par V6.
 
-    Contrat de schemas
-    - stg    : donnees brutes temporaires (inventaire PSSE, import CSV via Load-DictionaryCSV.ps1)
-    - dic    : dictionnaire normalise exploitable (apres v6_05a)
+    Contrat de schémas
+    - stg    : données brutes temporaires (inventaire PSSE, import CSV via Load-DictionaryCSV.ps1)
+    - dic    : dictionnaire normalisé exploitable (après v6_05a)
     - cfg    : configuration du tenant (PWA, Settings, scopes)
-    - review : decisions et corrections manuelles
-    - report : resultats de controle qualite
-    - log    : journal d'execution des scripts
+    - review : décisions et corrections manuelles
+    - report : résultats de contrôle qualité
+    - log    : journal d'exécution des scripts
 
     Notes V6
     - Le chargement des CSV du dictionnaire est fait par Load-DictionaryCSV.ps1 (SqlBulkCopy -> stg.import_dictionary_*).
-    - Le schema `load` est obsolete et n'est pas cree.
-    - Lit cfg.Settings et cfg.PwaSchemaScope pour inventorier la BD content PSSE et creer les synonymes.
+    - Le schema `load` est obsolète et n'est pas créé.
+    - Lit cfg.Settings et cfg.PwaSchemaScope pour inventorier la BD content PSSE et créer les synonymes.
 
     Structure en 4 lots GO:
-      Lot 1 : prerequis et schemas.
-      Lot 2 : creation des tables si absentes (DDL pur, rejouable).
-      Lot 3 : migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot separe requis).
-      Lot 4 : inventaire PSSE, mise a jour cfg.PwaObjectScope, synonymes src_*, rapport.
+      Lot 1 : prérequis et schémas.
+      Lot 2 : création des tables si absentes (DDL pur, rejouable).
+      Lot 3 : migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot séparé requis).
+      Lot 4 : inventaire PSSE, mise à jour cfg.PwaObjectScope, synonymes src_*, rapport.
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 GO
 
-/* ===== LOT 1 : Prerequis et creation des schemas ===== */
+/* ===== LOT 1 : Prérequis et création des schémas ===== */
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 63001, N'Executer ce script dans la base SmartBox cible.', 1;
+    THROW 63001, N'Exécuter ce script dans la base SmartBox cible.', 1;
 END;
 
 IF OBJECT_ID(N'cfg.Settings', N'U') IS NULL
-    THROW 63002, N'cfg.Settings absente. Executer v6_02a avant v6_03a.', 1;
+    THROW 63002, N'cfg.Settings absente. Exécuter v6_02a avant v6_03a.', 1;
 
 IF OBJECT_ID(N'log.ScriptExecutionLog', N'U') IS NULL
-    THROW 63003, N'log.ScriptExecutionLog absente. Executer v6_02a avant v6_03a.', 1;
+    THROW 63003, N'log.ScriptExecutionLog absente. Exécuter v6_02a avant v6_03a.', 1;
 
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'src') EXEC(N'CREATE SCHEMA src AUTHORIZATION dbo;');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'stg') EXEC(N'CREATE SCHEMA stg AUTHORIZATION dbo;');
@@ -51,7 +51,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'review') EXEC(N'CREATE S
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'report') EXEC(N'CREATE SCHEMA report AUTHORIZATION dbo;');
 GO
 
-/* ===== LOT 2 : Creation des tables si absentes (DDL pur, rejouable) ===== */
+/* ===== LOT 2 : Création des tables si absentes (DDL pur, rejouable) ===== */
 
 IF OBJECT_ID(N'cfg.PwaObjectScope', N'U') IS NULL
 BEGIN
@@ -268,7 +268,7 @@ BEGIN
 END;
 GO
 
-/* ===== LOT 3 : Migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot separe requis) ===== */
+/* ===== LOT 3 : Migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot séparé requis) ===== */
 /* Correctif 2: idempotent pour les installations existantes sans cette colonne. */
 IF COL_LENGTH(N'cfg.PwaObjectScope', N'SourceDatabaseName') IS NULL
     ALTER TABLE cfg.PwaObjectScope ADD SourceDatabaseName sysname NULL;
@@ -300,7 +300,7 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'START',
     @Severity = N'INFO',
     @Status = N'STARTED',
-    @Message = N'Debut creation des fondations V6.';
+    @Message = N'Début création des fondations V6.';
 
 SELECT @ContentDbName = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
 FROM cfg.Settings
@@ -504,7 +504,7 @@ EXEC log.usp_WriteScriptLog
     @Message = N'Inventaire PSSE natif et cfg.PwaObjectScope synchronises.',
     @RowsAffected = @ObjectCount;
 
-/* Creation des schemas src_* depuis cfg.PwaObjectScope. */
+/* Création des schémas src_* depuis cfg.PwaObjectScope. */
 DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR
     SELECT DISTINCT SmartBoxSchemaName
     FROM cfg.PwaObjectScope
@@ -530,7 +530,7 @@ END;
 CLOSE schema_cursor;
 DEALLOCATE schema_cursor;
 
-/* Correctif 4: supprimer tous les synonymes existants dans les schemas src_* avant reconstruction. */
+/* Correctif 4: supprimer tous les synonymes existants dans les schémas src_* avant reconstruction. */
 SELECT @DropAllSynonymsSql = STRING_AGG(
     N'DROP SYNONYM ' + QUOTENAME(SCHEMA_NAME(schema_id)) + N'.' + QUOTENAME(name) + N';',
     N' '
@@ -541,7 +541,7 @@ WHERE SCHEMA_NAME(schema_id) LIKE N'src_%';
 IF @DropAllSynonymsSql IS NOT NULL
     EXEC sys.sp_executesql @DropAllSynonymsSql;
 
-/* Creation des synonymes source depuis cfg.PwaObjectScope. */
+/* Création des synonymes source depuis cfg.PwaObjectScope. */
 DECLARE synonym_cursor CURSOR LOCAL FAST_FORWARD FOR
     SELECT
         SourceSchemaName,
@@ -583,12 +583,12 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'SYNONYMS',
     @Severity = N'INFO',
     @Status = N'COMPLETED',
-    @Message = N'Synonymes source crees depuis cfg.PwaObjectScope.',
+    @Message = N'Synonymes source créés depuis cfg.PwaObjectScope.',
     @RowsAffected = @SynonymCount;
 
 SET @EndMessage = CONCAT
 (
-    N'Fondations V6 creees ou validees. ContentDbName=',
+    N'Fondations V6 créées ou validees. ContentDbName=',
     @ContentDbName,
     N'; Objects=',
     @ObjectCount,

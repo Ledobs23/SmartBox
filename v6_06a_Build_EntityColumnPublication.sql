@@ -4,19 +4,19 @@
     Phase       : 06a - Publication canonique
     Role        : Construire dic.EntityBinding, dic.EntityJoin, dic.EntityColumnPublication
                   et les brouillons stg.EntityJoin_Draft, stg.ODataPsseMap_Draft.
-                  Cette couche est la source de verite pour la generation de vues FR/EN (v6_07a).
+                  Cette couche est la source de vérité pour la génération de vues FR/EN (v6_07a).
 
     Notes V6
-    - Prerequis : v6_05a execute (dic.EntityColumnMap, stg.EntitySource_Draft peuplees).
-    - Idempotent : rejouable. Les overrides manuels (MapStatus/BindingStatus = MANUAL) sont preserves.
-    - dic.EntityBinding    : source PSSE primaire par entite (clause FROM des vues).
-    - dic.EntityJoin       : jointures secondaires detectees.
+    - Prérequis : v6_05a exécuté (dic.EntityColumnMap, stg.EntitySource_Draft peuplées).
+    - Idempotent : rejouable. Les overrides manuels (MapStatus/BindingStatus = MANUAL) sont préservés.
+    - dic.EntityBinding    : source PSSE primaire par entité (clause FROM des vues).
+    - dic.EntityJoin       : jointures secondaires détectées.
     - dic.EntityColumnPublication : mapping colonne-par-colonne avec expression SQL et fallback.
     - MapStatus : MAPPED | MAPPED_NEEDS_JOIN | UNMAPPED | NAVIGATION
-      MAPPED           = PsseColumnName connu, alias de source resolu -> SourceExpression utilisable
-      MAPPED_NEEDS_JOIN = PsseColumnName connu mais source secondaire sans jointure definie -> IsPublished=0
+      MAPPED           = PsseColumnName connu, alias de source résolu -> SourceExpression utilisable
+      MAPPED_NEEDS_JOIN = PsseColumnName connu mais source secondaire sans jointure définie -> IsPublished=0
       UNMAPPED         = Aucune colonne PSSE correspondante -> FallbackExpression CAST(NULL AS type)
-      NAVIGATION       = Colonne non-PRIMITIVE (lien navigationnel OData) -> expression non auto-resolue
+      NAVIGATION       = Colonne non-PRIMITIVE (lien navigationnel OData) -> expression non auto-résolue
     - Langue ciblee par cfg.PWA.Language (FR ou EN) : les deux alias (Column_FR, Column_EN) sont stockes.
     - Journalisation dans log.ScriptExecutionLog et stg.EntityDraftBuildLog.
 =====================================================================================================================*/
@@ -25,7 +25,7 @@ SET XACT_ABORT ON;
 GO
 
 /* ===========================================================================================
-   LOT 1 : Creation des tables si absentes (DDL pur, rejouable)
+   LOT 1 : Création des tables si absentes (DDL pur, rejouable)
    =========================================================================================== */
 
 IF OBJECT_ID(N'dic.EntityBinding', N'U') IS NULL
@@ -209,13 +209,13 @@ SELECT @ContentDbName = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
 FROM cfg.Settings WHERE SettingKey = N'ContentDbName';
 
 IF OBJECT_ID(N'dic.Entity', N'U') IS NULL
-    THROW 66101, N'dic.Entity absente. Executer v6_05a avant v6_06a.', 1;
+    THROW 66101, N'dic.Entity absente. Exécuter v6_05a avant v6_06a.', 1;
 IF OBJECT_ID(N'dic.EntityColumnMap', N'U') IS NULL
-    THROW 66102, N'dic.EntityColumnMap absente. Executer v6_05a avant v6_06a.', 1;
+    THROW 66102, N'dic.EntityColumnMap absente. Exécuter v6_05a avant v6_06a.', 1;
 IF NOT EXISTS (SELECT 1 FROM dic.EntityColumnMap)
-    THROW 66103, N'dic.EntityColumnMap est vide. Executer v6_05a avant v6_06a.', 1;
+    THROW 66103, N'dic.EntityColumnMap est vide. Exécuter v6_05a avant v6_06a.', 1;
 IF NOT EXISTS (SELECT 1 FROM stg.EntitySource_Draft)
-    THROW 66104, N'stg.EntitySource_Draft est vide. Executer v6_05a avant v6_06a.', 1;
+    THROW 66104, N'stg.EntitySource_Draft est vide. Exécuter v6_05a avant v6_06a.', 1;
 
 /* Nettoyage complet des tables de travail (idempotence) */
 TRUNCATE TABLE stg.EntityDraftBuildLog;
@@ -225,11 +225,11 @@ TRUNCATE TABLE stg.ODataPsseMap_Draft;
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'START', @Severity=N'INFO', @Status=N'STARTED',
-    @Message=N'Debut construction publication canonique V6.';
+    @Message=N'Début construction publication canonique V6.';
 
 /* ===========================================================================================
    ETAPE A : dic.EntityBinding
-   Source primaire PSSE par entite. Utilise la derniere entree par entite de stg.EntitySource_Draft
+   Source primaire PSSE par entité. Utilise la derniere entree par entité de stg.EntitySource_Draft
    (la plus recente par ProposedAt, puis la mieux couverte).
    Protection : BindingStatus = MANUAL n'est pas ecrase.
    =========================================================================================== */
@@ -283,7 +283,7 @@ WHEN NOT MATCHED THEN
 
 SET @EntityBindingCount = @@ROWCOUNT;
 
-SET @Msg = CONCAT(N'dic.EntityBinding synchronise: ', @EntityBindingCount, N' entites.');
+SET @Msg = CONCAT(N'dic.EntityBinding synchronise: ', @EntityBindingCount, N' entités.');
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'ENTITY_BINDING', @Severity=N'INFO', @Status=N'COMPLETED',
@@ -293,7 +293,7 @@ EXEC log.usp_WriteScriptLog
 /* ===========================================================================================
    ETAPE B : stg.EntityJoin_Draft
    Detecter les colonnes PSSE provenant d'une source secondaire (differente de dic.EntityBinding).
-   Pour chaque source secondaire par entite, proposer une expression de jointure en cherchant
+   Pour chaque source secondaire par entité, proposer une expression de jointure en cherchant
    la premiere colonne en commun se terminant par UID ou Id dans stg.ColumnInventory.
    =========================================================================================== */
 INSERT INTO stg.EntityJoin_Draft
@@ -322,7 +322,7 @@ SELECT
         N' (', sec.ColCount, N' col(s))',
         CASE WHEN key_col.ColumnName IS NOT NULL
              THEN CONCAT(N'; cle candidate: ', key_col.ColumnName)
-             ELSE N'; aucune cle commune UID/Id detectee'
+             ELSE N'; aucune cle commune UID/Id détectée'
         END
     )                                                          AS Notes
 FROM
@@ -364,7 +364,7 @@ OUTER APPLY
 
 SET @JoinDraftCount = @@ROWCOUNT;
 
-SET @Msg = CONCAT(N'stg.EntityJoin_Draft: ', @JoinDraftCount, N' jointures secondaires detectees.');
+SET @Msg = CONCAT(N'stg.EntityJoin_Draft: ', @JoinDraftCount, N' jointures secondaires détectées.');
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'JOIN_DRAFT', @Severity=N'INFO', @Status=N'COMPLETED',
@@ -439,7 +439,7 @@ SELECT
         WHEN ecm.PsseColumnName IS NULL THEN NULL
         WHEN ecm.PsseSourceObject = eb.PsseObjectName THEN N'src'
         WHEN ej.JoinAlias IS NOT NULL THEN ej.JoinAlias
-        ELSE NULL  /* source connue mais jointure non definie -> MAPPED_NEEDS_JOIN */
+        ELSE NULL  /* source connue mais jointure non définie -> MAPPED_NEEDS_JOIN */
     END,
     /* SourceExpression */
     CASE
@@ -517,7 +517,7 @@ EXEC log.usp_WriteScriptLog
 /* ===========================================================================================
    ETAPE E : dic.EntityColumnPublication
    Publier depuis stg.ODataPsseMap_Draft.
-   IsPublished = 0 uniquement pour MAPPED_NEEDS_JOIN (jointure non resolue).
+   IsPublished = 0 uniquement pour MAPPED_NEEDS_JOIN (jointure non résolue).
    Les overrides manuels (MapStatus = MANUAL) ne sont pas ecrases.
    =========================================================================================== */
 MERGE dic.EntityColumnPublication AS T
@@ -614,7 +614,7 @@ EXEC log.usp_WriteScriptLog
    ETAPE F : Journal de construction (stg.EntityDraftBuildLog)
    =========================================================================================== */
 
-/* Entites sans binding resolu */
+/* Entites sans binding résolu */
 INSERT INTO stg.EntityDraftBuildLog (RunId, EntityName_EN, Phase, Severity, Message)
 SELECT
     @RunId,
@@ -622,7 +622,7 @@ SELECT
     N'BINDING_QUALITY',
     N'WARN',
     CONCAT(
-        N'Entite [', e.EntityName_EN, N'] : binding non resolu',
+        N'Entite [', e.EntityName_EN, N'] : binding non résolu',
         N' (ConfidenceLevel=', ISNULL(eb.ConfidenceLevel, N'ABSENT'), N').',
         N' Definir un binding manuel dans dic.EntityBinding.'
     )
@@ -644,7 +644,7 @@ SELECT
     N'WARN',
     CONCAT(
         N'Entite [', EntityName_EN, N'] jointure [', JoinTag, N'] vers [', PsseObjectName, N'] : ',
-        N'expression manuelle requise. Mettre a jour dic.EntityJoin.JoinExpression.'
+        N'expression manuelle requise. Mettre à jour dic.EntityJoin.JoinExpression.'
     )
 FROM dic.EntityJoin
 WHERE JoinStatus = N'MANUAL_REQUIRED'
@@ -661,7 +661,7 @@ BEGIN
         CONCAT(
             @MappedNeedsJoinCount,
             N' colonne(s) MAPPED_NEEDS_JOIN dans dic.EntityColumnPublication. ',
-            N'Ces colonnes ont une source PSSE connue mais la jointure n''est pas definie. ',
+            N'Ces colonnes ont une source PSSE connue mais la jointure n''est pas définie. ',
             N'Resoudre dic.EntityJoin.JoinExpression correspondant, puis rejouer v6_06a.'
         )
     );
@@ -677,7 +677,7 @@ BEGIN
         N'INFO',
         CONCAT(
             @UnmappedCount,
-            N' colonne(s) UNMAPPED utilisent CAST(NULL AS type) dans les vues generees.',
+            N' colonne(s) UNMAPPED utilisént CAST(NULL AS type) dans les vues générées.',
             N' Consulter stg.DictionaryQualityIssue pour le detail.'
         )
     );
@@ -687,7 +687,7 @@ SELECT @WarnCount = COUNT(*)
 FROM stg.EntityDraftBuildLog
 WHERE RunId = @RunId AND Severity = N'WARN';
 
-SET @Msg = CONCAT(N'Rapport qualite: WARN=', @WarnCount, N'. Voir stg.EntityDraftBuildLog.');
+SET @Msg = CONCAT(N'Rapport qualité: WARN=', @WarnCount, N'. Voir stg.EntityDraftBuildLog.');
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'QUALITY', @Severity=N'INFO', @Status=N'COMPLETED',
@@ -698,7 +698,7 @@ EXEC log.usp_WriteScriptLog
    ETAPE G : Rapport final
    =========================================================================================== */
 SET @Msg = CONCAT(
-    N'Publication canonique V6 terminee. PwaLanguage=', @PwaLanguage,
+    N'Publication canonique V6 terminée. PwaLanguage=', @PwaLanguage,
     N'; dic.EntityBinding=', @EntityBindingCount,
     N'; dic.EntityJoin=', @JoinPublishedCount,
     N'; dic.EntityColumnPublication=', (SELECT COUNT(*) FROM dic.EntityColumnPublication),
@@ -739,7 +739,7 @@ IF @WarnCount > 0
     WHERE RunId = @RunId AND Severity IN (N'WARN', N'ERROR')
     ORDER BY Severity DESC, LoggedAt;
 
-/* Vue d'ensemble par entite : couverture finale */
+/* Vue d'ensemble par entité : couverture finale */
 SELECT
     eb.EntityName_EN,
     eb.EntityName_FR,

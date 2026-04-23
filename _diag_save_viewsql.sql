@@ -1,10 +1,10 @@
 /*
-    Diagnostic v6_07a — Sauvegarde le SQL genere pour les 6 entites en erreur.
+    Diagnostic v6_07a — Sauvegarde le SQL génère pour les 6 entités en erreur.
     Retourne 3 result sets :
       1. Bindings + JoinExpressions
       2. Colonnes suspectes (QUOTENAME NULL, SourceExpression avec '=', alias long)
       3. SQL complet de chaque vue (ColListFR + FROM + JOINs)
-    Executer dans VS Code connecte a SPR. Partager les resultats.
+    Exécuter dans VS Code connecté à SPR. Partager les résultats.
 */
 SET NOCOUNT ON;
 
@@ -61,7 +61,7 @@ WHERE EntityName_EN IN (
   )
 ORDER BY EntityName_EN, ColumnPosition;
 
-/* ===== 3. SQL genere par entite ===== */
+/* ===== 3. SQL génère par entité ===== */
 SELECT
     eb.EntityName_EN,
     ISNULL(

@@ -2,34 +2,34 @@
     v6_05a_Load_Dictionary_From_LoadTables.sql
     Projet      : SmartBox
     Phase       : 05a - Dictionnaire et mapping OData/PSSE
-    Role        : Creer les tables cfg.dictionary_*, dic.*, stg.quality et alimenter le pipeline
+    Role        : Créer les tables cfg.dictionary_*, dic.*, stg.quality et alimenter le pipeline
                   de mapping OData <-> PSSE depuis stg.import_dictionary_*.
 
     Notes V6
-    - Aucune dependance a xp_cmdshell.
-    - Chargement CSV possible via BULK INSERT (si DictionarySourcePath configure) ou pre-chargement externe.
-    - Pipeline idempotent : rejouable sans perte de donnees.
+    - Aucune dépendance a xp_cmdshell.
+    - Chargement CSV possible via BULK INSERT (si DictionarySourcePath configuré) ou pre-chargement externe.
+    - Pipeline idempotent : rejouable sans perte de données.
     - Logs dans log.ScriptExecutionLog. Pas de stg.RunLog.
-    - Langue pilotee par cfg.PWA.Language (FR ou EN).
-    - dic.EntityColumnPublication est la source de verite consommable (phase ulterieure).
+    - Langue pilotée par cfg.PWA.Language (FR ou EN).
+    - dic.EntityColumnPublication est la source de vérité consommable (phase ultérieure).
 
-    Prerequis
-    - v6_02a execute (cfg.Settings, log.ScriptExecutionLog)
-    - v6_03a execute (stg.ObjectInventory, stg.ColumnInventory, synonymes src_*)
+    Prérequis
+    - v6_02a exécuté (cfg.Settings, log.ScriptExecutionLog)
+    - v6_03a exécuté (stg.ObjectInventory, stg.ColumnInventory, synonymes src_*)
     - stg.import_dictionary_od_fields          peuple (voir note chargement ci-bas)
     - stg.import_dictionary_lookup_entries     peuple
     - stg.import_dictionary_projectdata_alias  peuple
 
     Chargement des CSV (jour 1)
-    Si AllowFileSystemAccess = 0 (valeur par defaut MTMD) :
+    Si AllowFileSystemAccèss = 0 (valeur par défaut MTMD) :
       - Utiliser SqlBulkCopy depuis PowerShell, SSIS ou outil externe
-      - Les colonnes cibles sont definies dans stg.import_dictionary_*
-      - Une fois les tables peuplees, rejouer ce script
-    Si AllowFileSystemAccess = 1 et DictionarySourcePath configure :
+      - Les colonnes cibles sont définies dans stg.import_dictionary_*
+      - Une fois les tables peuplées, rejouer ce script
+    Si AllowFileSystemAccèss = 1 et DictionarySourcePath configuré :
       - Ce script tentera BULK INSERT automatiquement (voir Phase B)
 
     PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA
-    Aucun parametre client obligatoire dans ce script.
+    Aucun paramètre client obligatoire dans ce script.
     Le comportement est pilote par cfg.Settings.
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -37,19 +37,19 @@ SET XACT_ABORT ON;
 GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
-    THROW 65001, N'Executer ce script dans la base SmartBox cible.', 1;
+    THROW 65001, N'Exécuter ce script dans la base SmartBox cible.', 1;
 
 IF OBJECT_ID(N'cfg.Settings', N'U') IS NULL
-    THROW 65002, N'cfg.Settings absente. Executer v6_02a avant v6_05a.', 1;
+    THROW 65002, N'cfg.Settings absente. Exécuter v6_02a avant v6_05a.', 1;
 
 IF OBJECT_ID(N'log.ScriptExecutionLog', N'U') IS NULL
-    THROW 65003, N'log.ScriptExecutionLog absente. Executer v6_02a avant v6_05a.', 1;
+    THROW 65003, N'log.ScriptExecutionLog absente. Exécuter v6_02a avant v6_05a.', 1;
 
 IF OBJECT_ID(N'stg.ObjectInventory', N'U') IS NULL
-    THROW 65004, N'stg.ObjectInventory absente. Executer v6_03a avant v6_05a.', 1;
+    THROW 65004, N'stg.ObjectInventory absente. Exécuter v6_03a avant v6_05a.', 1;
 
 IF OBJECT_ID(N'stg.import_dictionary_od_fields', N'U') IS NULL
-    THROW 65005, N'stg.import_dictionary_od_fields absente. Executer v6_03a avant v6_05a.', 1;
+    THROW 65005, N'stg.import_dictionary_od_fields absente. Exécuter v6_03a avant v6_05a.', 1;
 
 /* ===========================================================================================
    PHASE A : CREATION DES TABLES SI ABSENTES
@@ -241,7 +241,7 @@ BEGIN
         ON stg.ODataPsseExactColumnMatch (EntityName_EN, Column_EN, MatchType);
 END;
 
-/* stg.DictionaryQualityIssue - Anomalies detectees dans le dictionnaire */
+/* stg.DictionaryQualityIssue - Anomalies détectées dans le dictionnaire */
 IF OBJECT_ID(N'stg.DictionaryQualityIssue', N'U') IS NULL
 BEGIN
     CREATE TABLE stg.DictionaryQualityIssue
@@ -258,7 +258,7 @@ BEGIN
     );
 END;
 
-/* stg.EntitySource_Draft - Sources PSSE proposees par entite */
+/* stg.EntitySource_Draft - Sources PSSE proposees par entité */
 IF OBJECT_ID(N'stg.EntitySource_Draft', N'U') IS NULL
 BEGIN
     CREATE TABLE stg.EntitySource_Draft
@@ -283,13 +283,13 @@ END;
 GO
 
 /* ===========================================================================================
-   PHASE B : BULK INSERT CONDITIONNEL (si DictionarySourcePath configure et acces permis)
+   PHASE B : BULK INSERT CONDITIONNEL (si DictionarySourcePath configuré et accès permis)
    =========================================================================================== */
 DECLARE @RunId                  uniqueidentifier = newid();
 DECLARE @ScriptName             sysname          = N'v6_05a_Load_Dictionary_From_LoadTables.sql';
 DECLARE @ContentDbName          sysname;
 DECLARE @PwaId                  int;
-DECLARE @AllowFileSystemAccess  bit;
+DECLARE @AllowFileSystemAccèss  bit;
 DECLARE @AllowCsvDay1Import     nvarchar(20);
 DECLARE @DictionarySourcePath   nvarchar(500);
 DECLARE @DictionaryFile_PD      nvarchar(260);
@@ -308,13 +308,13 @@ FROM cfg.Settings WHERE SettingKey = N'ContentDbName';
 SELECT @PwaId = TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
 FROM cfg.Settings WHERE SettingKey = N'PwaId';
 
-SELECT @AllowFileSystemAccess = TRY_CONVERT(bit, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
-FROM cfg.Settings WHERE SettingKey = N'AllowFileSystemAccess';
+SELECT @AllowFileSystemAccèss = TRY_CONVERT(bit, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
+FROM cfg.Settings WHERE SettingKey = N'AllowFileSystemAccèss';
 
 SELECT @AllowCsvDay1Import = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
 FROM cfg.Settings WHERE SettingKey = N'AllowCsvDay1Import';
 
-/* DictionarySourcePath : ajouter dans cfg.Settings si BULK INSERT sera utilise. */
+/* DictionarySourcePath : ajouter dans cfg.Settings si BULK INSERT sera utilisé. */
 SELECT @DictionarySourcePath = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
 FROM cfg.Settings WHERE SettingKey = N'DictionarySourcePath';
 
@@ -332,14 +332,14 @@ SET @PwaId = ISNULL(@PwaId, 1);
 EXEC log.usp_WriteScriptLog
     @RunId = @RunId, @ScriptName = @ScriptName, @ScriptVersion = N'V6-DRAFT',
     @Phase = N'START', @Severity = N'INFO', @Status = N'STARTED',
-    @Message = N'Debut construction dictionnaire V6.';
+    @Message = N'Début construction dictionnaire V6.';
 
-/* Compter ce qui est deja dans stg.import */
+/* Compter ce qui est déjà dans stg.import */
 SELECT @OdFieldsCount = COUNT(*) FROM stg.import_dictionary_od_fields;
 SELECT @LookupCount   = COUNT(*) FROM stg.import_dictionary_lookup_entries;
 SELECT @AliasCount    = COUNT(*) FROM stg.import_dictionary_projectdata_alias;
 
-IF @AllowFileSystemAccess = 1
+IF @AllowFileSystemAccèss = 1
     AND @AllowCsvDay1Import IN (N'OPTIONAL', N'YES')
     AND @DictionarySourcePath IS NOT NULL
     AND (@OdFieldsCount = 0 OR @LookupCount = 0 OR @AliasCount = 0)
@@ -418,7 +418,7 @@ BEGIN
         N'Tables stg.import_dictionary_* partiellement vides. ',
         N'od_fields=', @OdFieldsCount, N'; lookups=', @LookupCount, N'; alias=', @AliasCount,
         N'. Pre-charger via SqlBulkCopy (PowerShell), SSIS ou outil externe avant de rejouer ce script. ',
-        N'Consult la procedure de chargement dans la documentation V6.');
+        N'Consult la procédure de chargement dans la documentation V6.');
     EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
         @Phase=N'LOAD_CHECK',@Severity=N'WARN',@Status=N'WARNING',@Message=@Msg;
     PRINT @Msg;
@@ -429,7 +429,7 @@ BEGIN
     EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
         @Phase=N'LOAD_CHECK',@Severity=N'ERROR',@Status=N'ABORTED',
         @Message=N'Aucune donnee dans les tables stg.import_dictionary_*. Script interrompu.';
-    THROW 65010, N'Les tables stg.import_dictionary_* sont toutes vides. Charger les donnees CSV avant de rejouer v6_05a.', 1;
+    THROW 65010, N'Les tables stg.import_dictionary_* sont toutes vides. Charger les données CSV avant de rejouer v6_05a.', 1;
 END;
 
 /* ===========================================================================================
@@ -825,13 +825,13 @@ WHERE ecm.ColumnClassification = N'PRIMITIVE'
 DECLARE @ExactCount int = (SELECT COUNT(*) FROM stg.ODataPsseExactColumnMatch WHERE RunId=@RunId AND MatchType=N'EXACT');
 DECLARE @NoMatchCount int = (SELECT COUNT(*) FROM stg.ODataPsseExactColumnMatch WHERE RunId=@RunId AND MatchType=N'NO_MATCH');
 
-SET @Msg = CONCAT(N'Matching OData/PSSE termine. EXACT=',@ExactCount,N'; NO_MATCH=',@NoMatchCount,N'.');
+SET @Msg = CONCAT(N'Matching OData/PSSE terminé. EXACT=',@ExactCount,N'; NO_MATCH=',@NoMatchCount,N'.');
 EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
     @Phase=N'COLUMN_MATCH',@Severity=N'INFO',@Status=N'COMPLETED',
     @Message=@Msg,@RowsAffected=@ExactCount;
 
 /* ===========================================================================================
-   PHASE G : ENRICHISSEMENT dic.EntityColumnMap avec source PSSE dominante par entite
+   PHASE G : ENRICHISSEMENT dic.EntityColumnMap avec source PSSE dominante par entité
    Pour chaque (EntityName_EN, Column_EN), choisir le SourceObject le plus representatif.
    =========================================================================================== */
 ;WITH ranked_sources AS
@@ -886,7 +886,7 @@ WHERE PsseMatchScore IS NULL
 
 /* ===========================================================================================
    PHASE H : SOURCE DRAFT PAR ENTITE (stg.EntitySource_Draft)
-   Propose le meilleur objet PSSE pour servir de FROM principal par entite.
+   Propose le meilleur objet PSSE pour servir de FROM principal par entité.
    =========================================================================================== */
 TRUNCATE TABLE stg.EntitySource_Draft;
 
@@ -1030,7 +1030,7 @@ DECLARE @QualityWarnCount  int   = (SELECT COUNT(*) FROM stg.DictionaryQualityIs
 DECLARE @QualityInfoCount  int   = (SELECT COUNT(*) FROM stg.DictionaryQualityIssue WHERE RunId=@RunId AND IssueSeverity=N'INFO');
 
 DECLARE @QualityRowsAffected int = @QualityErrorCount + @QualityWarnCount;
-SET @Msg = CONCAT(N'Rapport qualite: ERROR=',@QualityErrorCount,N'; WARN=',@QualityWarnCount,N'; INFO=',@QualityInfoCount,N'.');
+SET @Msg = CONCAT(N'Rapport qualité: ERROR=',@QualityErrorCount,N'; WARN=',@QualityWarnCount,N'; INFO=',@QualityInfoCount,N'.');
 EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
     @Phase=N'QUALITY',@Severity=N'INFO',@Status=N'COMPLETED',
     @Message=@Msg,@RowsAffected=@QualityRowsAffected;
@@ -1048,7 +1048,7 @@ DECLARE @AliasNorm          int = (SELECT COUNT(*) FROM cfg.dictionary_projectda
 DECLARE @SourceHighCount    int = (SELECT COUNT(*) FROM stg.EntitySource_Draft WHERE RunId=@RunId AND ConfidenceLevel=N'HIGH');
 
 SET @Msg = CONCAT(
-    N'Pipeline dictionnaire V6 termine. ',
+    N'Pipeline dictionnaire V6 terminé. ',
     N'dic.Entity=', @EntityCount,
     N'; dic.EntityColumnMap=', @ColumnMapCount, N' (PRIMITIVE=', @PrimCount, N')',
     N'; dic.LookupMap=', @LookupMapCount, N' entrees / ', @LookupTableCount, N' tables',
@@ -1075,7 +1075,7 @@ SELECT N'stg.EntitySource_Draft (HIGH)',           @SourceHighCount             
 SELECT N'stg.DictionaryQualityIssue (WARN)',       @QualityWarnCount            UNION ALL
 SELECT N'stg.DictionaryQualityIssue (INFO)',       @QualityInfoCount;
 
-/* Top 10 entites par couverture PSSE */
+/* Top 10 entités par couverture PSSE */
 SELECT TOP 10
     EntityName_EN,
     ProposedSchema,
@@ -1088,7 +1088,7 @@ FROM stg.EntitySource_Draft
 WHERE RunId = @RunId
 ORDER BY CoverageScore DESC;
 
-/* Issues bloquantes (WARN non resolus) */
+/* Issues bloquantes (WARN non résolus) */
 SELECT TOP 20
     IssueSeverity,
     IssueCode,

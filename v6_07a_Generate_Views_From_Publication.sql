@@ -3,44 +3,44 @@
     Projet      : SmartBox
     Phase       : 07a - Generation dynamique des vues ProjectData depuis dic.EntityColumnPublication
     Role        : Generer les vues ProjectData.* et tbx_fr.* a partir de la couche de publication
-                  canonique. Remplace le snapshot fige de v6_04a pour les regenerations futures.
+                  canonique. Remplace le snapshot fige de v6_04a pour les régénérations futures.
 
     Notes V6
-    - Prerequis : v6_06a execute (dic.EntityBinding, dic.EntityJoin, dic.EntityColumnPublication).
-    - Ne touche pas aux vues deja generees par v6_04a sauf si l'entite est dans dic.EntityBinding.
-    - Langue des alias dans ProjectData.* pilotee par cfg.PWA.Language (FR ou EN).
-    - tbx_fr.* genere toujours les alias FR (pour les clients FR). tbx.* genere toujours EN.
+    - Prérequis : v6_06a exécuté (dic.EntityBinding, dic.EntityJoin, dic.EntityColumnPublication).
+    - Ne touche pas aux vues déjà générées par v6_04a sauf si l'entité est dans dic.EntityBinding.
+    - Langue des alias dans ProjectData.* pilotée par cfg.PWA.Language (FR ou EN).
+    - tbx_fr.* génère toujours les alias FR (pour les clients FR). tbx.* génère toujours EN.
     - Colonnes MAPPED     : SourceExpression AS alias
     - Colonnes UNMAPPED   : FallbackExpression (CAST NULL) AS alias
     - Colonnes NAVIGATION sans source : CAST(NULL AS nvarchar(255)) AS alias
-    - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'a resolution.
+    - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'a résolution.
     - ProjectData : nom de vue = EntityName_FR si PwaLanguage=FR (ex. Projets), EntityName_EN sinon (ex. Projects).
                    Aliases colonnes = Column_FR si PwaLanguage=FR, Column_EN sinon.
     - tbx_fr     : nom de vue = vw_EntityName_FR (ex. vw_Projets), aliases Column_FR (toujours FR).
     - tbx        : nom de vue = vw_EntityName_EN, aliases Column_EN (toujours EN, couche interne).
-    - En cas d'erreur sur une entite : log + continuation sur les entites suivantes.
+    - En cas d'erreur sur une entité : log + continuation sur les entités suivantes.
     - Journalisation dans log.ScriptExecutionLog et report.ViewStackValidation.
 =====================================================================================================================*/
 SET NOCOUNT ON;
-SET XACT_ABORT OFF;  /* OFF pour continuer en cas d'erreur sur une entite */
+SET XACT_ABORT OFF;  /* OFF pour continuer en cas d'erreur sur une entité */
 GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
-    THROW 67001, N'Executer ce script dans la base SmartBox cible.', 1;
+    THROW 67001, N'Exécuter ce script dans la base SmartBox cible.', 1;
 
 IF OBJECT_ID(N'dic.EntityColumnPublication', N'U') IS NULL
-    THROW 67002, N'dic.EntityColumnPublication absente. Executer v6_06a avant v6_07a.', 1;
+    THROW 67002, N'dic.EntityColumnPublication absente. Exécuter v6_06a avant v6_07a.', 1;
 
 IF OBJECT_ID(N'dic.EntityBinding', N'U') IS NULL
-    THROW 67003, N'dic.EntityBinding absente. Executer v6_06a avant v6_07a.', 1;
+    THROW 67003, N'dic.EntityBinding absente. Exécuter v6_06a avant v6_07a.', 1;
 
 IF NOT EXISTS (SELECT 1 FROM dic.EntityColumnPublication)
-    THROW 67004, N'dic.EntityColumnPublication est vide. Executer v6_06a avant v6_07a.', 1;
+    THROW 67004, N'dic.EntityColumnPublication est vide. Exécuter v6_06a avant v6_07a.', 1;
 
 IF NOT EXISTS (SELECT 1 FROM dic.EntityBinding WHERE IsActive = 1 AND PsseObjectName IS NOT NULL)
-    THROW 67005, N'Aucun binding actif dans dic.EntityBinding. Executer v6_06a avant v6_07a.', 1;
+    THROW 67005, N'Aucun binding actif dans dic.EntityBinding. Exécuter v6_06a avant v6_07a.', 1;
 
-/* Creer report.ViewStackValidation si absente */
+/* Créer report.ViewStackValidation si absente */
 IF OBJECT_ID(N'report.ViewStackValidation', N'U') IS NULL
 BEGIN
     CREATE TABLE report.ViewStackValidation
@@ -63,10 +63,10 @@ GO
 DECLARE @RunId         uniqueidentifier = newid();
 DECLARE @ScriptName    sysname          = N'v6_07a_Generate_Views_From_Publication.sql';
 DECLARE @PwaLanguage   nvarchar(10);
-DECLARE @TargetSchemas nvarchar(200);
+DECLARE @TargetSchémas nvarchar(200);
 
-/* Schemas cibles a generer: ProjectData (alias langue cible), tbx (EN), tbx_fr (FR) */
-/* Modifiable ici si besoin de restreindre la generation */
+/* Schémas cibles à générer: ProjectData (alias langue cible), tbx (EN), tbx_fr (FR) */
+/* Modifiable ici si besoin de restreindre la génération */
 DECLARE @GenProjectData bit = 1;
 DECLARE @GenTbx         bit = 1;
 DECLARE @GenTbxFr       bit = 1;
@@ -108,7 +108,7 @@ EXEC log.usp_WriteScriptLog
     @Message=@Msg;
 
 /* ===========================================================================================
-   Curseur sur chaque entite avec un binding actif et resolu
+   Curseur sur chaque entité avec un binding actif et résolu
    =========================================================================================== */
 DECLARE entity_cursor CURSOR LOCAL FAST_FORWARD FOR
     SELECT
@@ -131,7 +131,7 @@ INTO @EntityName_EN, @EntityName_FR, @PsseSchema, @PsseObject, @SmartBoxSchema, 
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    /* Verifier qu'il y a au moins une colonne publiable pour cette entite */
+    /* Verifier qu'il y a au moins une colonne publiable pour cette entité */
     IF NOT EXISTS (
         SELECT 1 FROM dic.EntityColumnPublication
         WHERE EntityName_EN = @EntityName_EN
@@ -240,7 +240,7 @@ FROM ', @FromClause,
             SET @ViewCreated += 1;
             INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
             VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED',
-                    CONCAT(N'Vue generee depuis dic.EntityColumnPublication. Source: ', @PsseObject));
+                    CONCAT(N'Vue générée depuis dic.EntityColumnPublication. Source: ', @PsseObject));
         END TRY
         BEGIN CATCH
             SET @ErrMsg = ERROR_MESSAGE();
@@ -284,7 +284,7 @@ FROM ', @FromClause,
             EXEC sys.sp_executesql @ViewSql;
             SET @ViewCreated += 1;
             INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
-            VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx EN generee.');
+            VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx EN générée.');
         END TRY
         BEGIN CATCH
             SET @ErrMsg = ERROR_MESSAGE();
@@ -321,7 +321,7 @@ FROM ', @FromClause,
             EXEC sys.sp_executesql @ViewSql;
             SET @ViewCreated += 1;
             INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
-            VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx_fr FR generee.');
+            VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx_fr FR générée.');
         END TRY
         BEGIN CATCH
             SET @ErrMsg = ERROR_MESSAGE();
@@ -343,8 +343,8 @@ DEALLOCATE entity_cursor;
    Rapport final
    =========================================================================================== */
 SET @Msg = CONCAT(
-    N'Generation vues terminee. ',
-    N'Creees=', @ViewCreated,
+    N'Generation vues terminée. ',
+    N'Créées=', @ViewCreated,
     N'; Echouees=', @ViewFailed,
     N'; Ignorees=', @ViewSkipped,
     N'. PwaLanguage=', @PwaLanguage
@@ -360,7 +360,7 @@ EXEC log.usp_WriteScriptLog
     @RowsAffected=@ViewCreated;
 
 /* Rapport console */
-SELECT N'Vues creees'  AS Metrique, CONVERT(nvarchar(30), @ViewCreated)  AS Valeur
+SELECT N'Vues créées'  AS Metrique, CONVERT(nvarchar(30), @ViewCreated)  AS Valeur
 UNION ALL SELECT N'Vues echouees', CONVERT(nvarchar(30), @ViewFailed)
 UNION ALL SELECT N'Entites ignorees', CONVERT(nvarchar(30), @ViewSkipped);
 
@@ -370,14 +370,14 @@ FROM report.ViewStackValidation
 WHERE RunId = @RunId
 ORDER BY ValidationStatus DESC, ViewSchema, ViewName;
 
-/* Pour valider les vues generees, executer apres ce script :
+/* Pour valider les vues générées, exécuter après ce script :
    SELECT v.name, s.name AS schema_name, m.is_schema_bound
    FROM sys.views v
    JOIN sys.schemas s ON s.schema_id = v.schema_id
    WHERE s.name IN (N'ProjectData', N'tbx', N'tbx_fr')
    ORDER BY s.name, v.name;
 
-   Et pour detecter les vues invalides :
+   Et pour détectér les vues invalides :
    SELECT OBJECT_SCHEMA_NAME(object_id) AS schm, name
    FROM sys.objects o
    WHERE type = N'V'

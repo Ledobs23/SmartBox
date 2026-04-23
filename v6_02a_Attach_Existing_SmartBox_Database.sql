@@ -2,12 +2,12 @@
     v6_02a_Attach_Existing_SmartBox_Database.sql
     Projet      : SmartBox
     Phase       : 02a - Attacher SmartBox a une base existante
-    Role        : Creer la configuration minimale V6 sans creer ni deplacer la base.
+    Role        : Créer la configuration minimale V6 sans créer ni déplacer la base.
 
     Notes V6
     - Remplace la portion applicative de v5_02a.
-    - Ne contient aucun CREATE DATABASE, ALTER DATABASE fichier, xp_cmdshell ou acces NTFS.
-    - Cree la table de log dans le schema log.
+    - Ne contient aucun CREATE DATABASE, ALTER DATABASE fichier, xp_cmdshell ou accès NTFS.
+    - Créé la table de log dans le schema log.
     - Paramètres déclaratifs dans le bloc PARAMETRES CLIENT (CTRL+F)     
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -16,7 +16,7 @@ GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 62001, N'Executer ce script dans la base SmartBox cible existante.', 1;
+    THROW 62001, N'Exécuter ce script dans la base SmartBox cible existante.', 1;
 END;
 GO
 
@@ -155,13 +155,13 @@ GO
 /*=====================================================================================================================
     PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA
 
-    Pour adapter ce script a un autre client/environnement, modifier les valeurs ci-dessous seulement.
+    Pour adapter ce script a un autre client/environnement, modifiér les valeurs ci-dessous seulement.
     Le reste du script lit ces variables et alimente cfg.Settings, cfg.PWA et cfg.PwaSchemaScope.
 
-    Valeurs MTMD confirmees pour ce deploiement:
-      - Base SmartBox cible        : SPR, soit la base dans laquelle ce script est execute.
+    Valeurs MTMD confirmees pour ce déploiement:
+      - Base SmartBox cible        : SPR, soit la base dans laquelle ce script est exécuté.
       - BD contenu PWA source      : SP_SPR_POC_Contenu.
-      - Compte de deploiement vise : MTQ\franbreton.
+      - Compte de déploiement vise : MTQ\franbreton.
 =====================================================================================================================*/
 DECLARE @ClientName nvarchar(128) = N'MTMD';                     -- Nom du client ou ministere.
 DECLARE @EnvironmentName nvarchar(30) = N'PROD';                 -- DEV, TEST, QA, PROD, etc.
@@ -170,12 +170,12 @@ DECLARE @DesignDatabaseName sysname = N'SPR';                    -- Nom attendu 
 DECLARE @ContentDbName sysname = N'SP_SPR_POC_Contenu';          -- Nom de la BD contenu PWA source du client.
 DECLARE @PwaId int = 1;                                          -- V6 supporte une PWA active dans cette trousse.
 DECLARE @PwaLanguage nvarchar(10) = N'FR';                       -- Langue principale: FR ou EN.
-DECLARE @ProjectSchemasCsv nvarchar(200) = N'pjrep,pjpub';       -- Schemas natifs PSSE a inventorier.
+DECLARE @ProjectSchemasCsv nvarchar(200) = N'pjrep,pjpub';       -- Schémas natifs PSSE a inventorier.
 
-/* Parametres de comportement V6 - modifier seulement si le mode de deploiement change. */
+/* Paramètres de comportement V6 - modifiér seulement si le mode de déploiement change. */
 DECLARE @ViewDefinitionMode nvarchar(40) = N'FROZEN_SNAPSHOT';
 DECLARE @FrozenViewSnapshotName nvarchar(260) = N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql';
-DECLARE @ExcludePsseContentCustomFields bit = 1;                 -- 1 = ne pas publier les champs personnalises du content PSSE.
+DECLARE @ExcludePsseContentCustomFields bit = 1;                 -- 1 = ne pas publier les champs personnalisés du content PSSE.
 DECLARE @LoadMode nvarchar(40) = N'STG_IMPORT_TABLES';           -- Les imports dictionnaire passent par stg.import_*.
 DECLARE @Day1LoadSourceMode nvarchar(30) = N'TOOL';              -- TOOL ou DBA_CSV pour le chargement initial vers stg.import_*.
 DECLARE @AllowCsvDay1Import nvarchar(20) = N'OPTIONAL';          -- CSV permis seulement au jour 1 si le DBA le choisit.
@@ -203,7 +203,7 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'START',
     @Severity = N'INFO',
     @Status = N'STARTED',
-    @Message = N'Debut attachement SmartBox V6 a une base existante.';
+    @Message = N'Début attachement SmartBox V6 a une base existante.';
 
 IF @LoginWarning IS NOT NULL
 BEGIN
@@ -224,34 +224,34 @@ USING
     UNION ALL SELECT N'ToolboxDbName', CONVERT(nvarchar(4000), DB_NAME()), N'IDENTITY', N'sysname', 1, 0, 0, N'Nom de la base SmartBox cible existante. Pour la conception courante: SPR.'
     UNION ALL SELECT N'DesignDatabaseName', CONVERT(nvarchar(4000), @DesignDatabaseName), N'IDENTITY', N'sysname', 1, 0, 0, N'Base de conception SmartBox V6.'
     UNION ALL SELECT N'EnvironmentName', CONVERT(nvarchar(4000), @EnvironmentName), N'IDENTITY', N'nvarchar(30)', 0, 0, 0, N'Nom logique de l''environnement.'
-    UNION ALL SELECT N'DeploymentMode', N'EXISTING_DATABASE', N'IDENTITY', N'nvarchar(40)', 1, 0, 0, N'La base existe deja; la trousse applicative ne cree pas la base.'
-    UNION ALL SELECT N'ClientName', CONVERT(nvarchar(4000), @ClientName), N'IDENTITY', N'nvarchar(128)', 0, 0, 0, N'Client ou contexte de deploiement.'
-    UNION ALL SELECT N'ExpectedDeploymentLogin', ISNULL(CONVERT(nvarchar(4000), @ExpectedDeploymentLogin), N''), N'SECURITY', N'sysname_nullable', 0, 0, 0, N'Login Windows/SQL attendu pour le deploiement. Vide = validation non bloquante.'
+    UNION ALL SELECT N'DeploymentMode', N'EXISTING_DATABASE', N'IDENTITY', N'nvarchar(40)', 1, 0, 0, N'La base existe déjà; la trousse applicative ne créé pas la base.'
+    UNION ALL SELECT N'ClientName', CONVERT(nvarchar(4000), @ClientName), N'IDENTITY', N'nvarchar(128)', 0, 0, 0, N'Client ou contexte de déploiement.'
+    UNION ALL SELECT N'ExpectedDeploymentLogin', ISNULL(CONVERT(nvarchar(4000), @ExpectedDeploymentLogin), N''), N'SECURITY', N'sysname_nullable', 0, 0, 0, N'Login Windows/SQL attendu pour le déploiement. Vide = validation non bloquante.'
     UNION ALL SELECT N'ContentDbName', CONVERT(nvarchar(4000), @ContentDbName), N'PWA', N'sysname', 1, 0, 0, N'Content DB PSSE native source.'
     UNION ALL SELECT N'PwaId', CONVERT(nvarchar(4000), @PwaId), N'PWA', N'int', 1, 0, 0, N'Identifiant PWA logique. La trousse courante supporte une PWA active.'
     UNION ALL SELECT N'PwaLanguage', CONVERT(nvarchar(4000), @PwaLanguage), N'PWA', N'nvarchar(10)', 1, 0, 0, N'Langue principale de publication.'
-    UNION ALL SELECT N'ProjectSchemasCsv', CONVERT(nvarchar(4000), @ProjectSchemasCsv), N'PWA', N'csv(sysname)', 1, 0, 0, N'Schemas PSSE sources separes par virgule.'
+    UNION ALL SELECT N'ProjectSchemasCsv', CONVERT(nvarchar(4000), @ProjectSchemasCsv), N'PWA', N'csv(sysname)', 1, 0, 0, N'Schémas PSSE sources séparés par virgule.'
     UNION ALL SELECT N'LoadMode', CONVERT(nvarchar(4000), @LoadMode), N'MODE', N'nvarchar(40)', 1, 0, 0, N'Mode V6: les imports dictionnaire transitent par stg.import_dictionary_*.'
     UNION ALL SELECT N'AllowCsvDay1Import', CONVERT(nvarchar(4000), @AllowCsvDay1Import), N'MODE', N'nvarchar(20)', 0, 0, 0, N'Autorise un chargement CSV initial par DBA vers stg.import_dictionary_*, hors pipeline courant.'
     UNION ALL SELECT N'Day1LoadSourceMode', CONVERT(nvarchar(4000), @Day1LoadSourceMode), N'LOAD', N'nvarchar(30)', 0, 0, 0, N'Source attendue pour les tables stg.import_dictionary_*: TOOL ou DBA_CSV.'
-    UNION ALL SELECT N'ActiveLoadBatchId', N'', N'LOAD', N'bigint_nullable', 0, 0, 1, N'Legacy V5/V6 initial: lot load.* a consommer. Non utilise dans la filiere stg.import_dictionary_*.'
-    UNION ALL SELECT N'RequireLoadBatchValidation', N'1', N'LOAD', N'bit', 1, 0, 1, N'Legacy V5/V6 initial: validation du lot load.*. Non utilise dans la filiere stg.import_dictionary_*.'
+    UNION ALL SELECT N'ActiveLoadBatchId', N'', N'LOAD', N'bigint_nullable', 0, 0, 1, N'Legacy V5/V6 initial: lot load.* à consommer. Non utilisé dans la filière stg.import_dictionary_*.'
+    UNION ALL SELECT N'RequireLoadBatchValidation', N'1', N'LOAD', N'bit', 1, 0, 1, N'Legacy V5/V6 initial: validation du lot load.*. Non utilisé dans la filière stg.import_dictionary_*.'
     UNION ALL SELECT N'ReviewMode', CONVERT(nvarchar(4000), @ReviewMode), N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les corrections passent par review.*, pas par CSV.'
     UNION ALL SELECT N'ReportMode', CONVERT(nvarchar(4000), @ReportMode), N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les rapports sont persistés dans report.*.'
-    UNION ALL SELECT N'LogMode', N'LOG_SCHEMA', N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les logs sont ecrits dans log.ScriptExecutionLog.'
+    UNION ALL SELECT N'LogMode', N'LOG_SCHEMA', N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les logs sont écrits dans log.ScriptExecutionLog.'
     UNION ALL SELECT N'ViewGenerationMode', N'NATIVE_STACKS', N'MODE', N'nvarchar(40)', 1, 0, 0, N'Generation principale via les piles natives.'
-    UNION ALL SELECT N'ViewDefinitionMode', CONVERT(nvarchar(4000), @ViewDefinitionMode), N'VIEW', N'nvarchar(40)', 1, 0, 0, N'Definitions de vues figees dans la trousse V6; pas de dependance runtime a SP_SPR_POC_Contenu.'
-    UNION ALL SELECT N'FrozenViewSnapshotName', CONVERT(nvarchar(4000), @FrozenViewSnapshotName), N'VIEW', N'nvarchar(260)', 1, 0, 0, N'Fichier snapshot contenant les definitions internes tbx/tbx_fr/tbx_master.'
-    UNION ALL SELECT N'ExcludePsseContentCustomFields', CONVERT(nvarchar(4000), @ExcludePsseContentCustomFields), N'VIEW', N'bit', 1, 0, 0, N'Les champs personnalises provenant de la BD content PSSE ne sont pas publies dans ProjectData.'
-    UNION ALL SELECT N'ReferenceViewDbName', N'SP_SPR_POC_Contenu', N'VIEW', N'sysname', 0, 0, 1, N'Ancienne base de reference utilisee pour generer le snapshot; non requise au runtime V6.'
+    UNION ALL SELECT N'ViewDefinitionMode', CONVERT(nvarchar(4000), @ViewDefinitionMode), N'VIEW', N'nvarchar(40)', 1, 0, 0, N'Definitions de vues figees dans la trousse V6; pas de dépendance runtime a SP_SPR_POC_Contenu.'
+    UNION ALL SELECT N'FrozenViewSnapshotName', CONVERT(nvarchar(4000), @FrozenViewSnapshotName), N'VIEW', N'nvarchar(260)', 1, 0, 0, N'Fichier snapshot contenant les définitions internes tbx/tbx_fr/tbx_master.'
+    UNION ALL SELECT N'ExcludePsseContentCustomFields', CONVERT(nvarchar(4000), @ExcludePsseContentCustomFields), N'VIEW', N'bit', 1, 0, 0, N'Les champs personnalisés provenant de la BD content PSSE ne sont pas publies dans ProjectData.'
+    UNION ALL SELECT N'ReferenceViewDbName', N'SP_SPR_POC_Contenu', N'VIEW', N'sysname', 0, 0, 1, N'Ancienne base de reference utilisée pour générer le snapshot; non requise au runtime V6.'
     UNION ALL SELECT N'CsvExportMode', N'DISABLED', N'MODE', N'nvarchar(20)', 1, 0, 0, N'Exports CSV depuis SQL Server desactives.'
     UNION ALL SELECT N'UseXpCmdShell', N'0', N'SECURITY', N'bit', 1, 0, 0, N'xp_cmdshell non requis par la trousse applicative V6.'
     UNION ALL SELECT N'RequireExistingDatabase', N'1', N'SECURITY', N'bit', 1, 0, 0, N'La base cible doit exister avant la trousse applicative.'
-    UNION ALL SELECT N'AllowCreateDatabase', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne cree pas de base.'
-    UNION ALL SELECT N'AllowMoveDatabaseFiles', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne deplace pas les fichiers MDF/LDF.'
-    UNION ALL SELECT N'AllowFileSystemAccess', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne depend pas du systeme de fichiers.'
+    UNION ALL SELECT N'AllowCreateDatabase', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne créé pas de base.'
+    UNION ALL SELECT N'AllowMoveDatabaseFiles', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne déplace pas les fichiers MDF/LDF.'
+    UNION ALL SELECT N'AllowFileSystemAccèss', N'0', N'SECURITY', N'bit', 1, 0, 0, N'La trousse applicative ne depend pas du systeme de fichiers.'
     UNION ALL SELECT N'DefaultRunFailPolicy', N'STOP_ON_ERROR', N'VALIDATION', N'nvarchar(40)', 1, 0, 0, N'Comportement standard en cas d''erreur bloquante.'
-    UNION ALL SELECT N'ValidationLookbackDays', N'3', N'VALIDATION', N'int', 0, 0, 0, N'Fenetre de rapport des erreurs recentes.'
+    UNION ALL SELECT N'ValidationLookbackDays', N'3', N'VALIDATION', N'int', 0, 0, 0, N'Fenêtre de rapport des erreurs recentes.'
     UNION ALL SELECT N'MaxBlockingErrorsToReport', N'500', N'VALIDATION', N'int', 0, 0, 0, N'Nombre maximal d''erreurs bloquantes a rapporter.'
     UNION ALL SELECT N'IncludeWarningsInBlockingReport', N'0', N'VALIDATION', N'bit', 0, 0, 0, N'Inclure les avertissements dans le rapport bloquant.'
     UNION ALL SELECT N'PersistReports', N'1', N'VALIDATION', N'bit', 1, 0, 0, N'Persister les rapports dans report.*.'
@@ -263,9 +263,9 @@ USING
     UNION ALL SELECT N'DictionaryFile_ProjectData', N'Fields_ProjectData_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export OData ProjectData. Charge dans stg.import_dictionary_od_fields.'
     UNION ALL SELECT N'DictionaryFile_Lookups', N'Lookups_ProjectServer_Export.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV export lookups. Charge dans stg.import_dictionary_lookup_entries.'
     UNION ALL SELECT N'DictionaryFile_ProjectDataAlias', N'ProjectData_Alias.csv', N'LOAD', N'nvarchar(260)', 0, 0, 0, N'Nom du fichier CSV alias bilingue OData. Charge dans stg.import_dictionary_projectdata_alias.'
-    UNION ALL SELECT N'ImportCsvToLoadTables', N'1', N'LOAD', N'bit', 0, 0, 1, N'Legacy libelle: 1 = utiliser SqlBulkCopy pour charger les CSV dans stg.import_dictionary_*.'
+    UNION ALL SELECT N'ImportCsvToLoadTables', N'1', N'LOAD', N'bit', 0, 0, 1, N'Legacy libelle: 1 = utilisér SqlBulkCopy pour charger les CSV dans stg.import_dictionary_*.'
     UNION ALL SELECT N'TruncateLoadTablesBeforeCsvImport', N'1', N'LOAD', N'bit', 0, 0, 0, N'1 = tronquer les tables stg.import_dictionary_* avant chargement CSV.'
-    UNION ALL SELECT N'Language', CONVERT(nvarchar(4000), @PwaLanguage), N'LEGACY', N'nvarchar(10)', 0, 0, 1, N'Legacy V5: utiliser PwaLanguage en V6.'
+    UNION ALL SELECT N'Language', CONVERT(nvarchar(4000), @PwaLanguage), N'LEGACY', N'nvarchar(10)', 0, 0, 1, N'Legacy V5: utilisér PwaLanguage en V6.'
 ) AS S
     ON S.SettingKey = T.SettingKey
 WHEN MATCHED THEN
@@ -358,7 +358,7 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'COMPLETED',
     @Severity = N'INFO',
     @Status = N'COMPLETED',
-    @Message = N'Attachement SmartBox V6 termine.';
+    @Message = N'Attachement SmartBox V6 terminé.';
 
 SELECT
     SettingGroup,

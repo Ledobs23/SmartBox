@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Charge les 3 CSV du dictionnaire SmartBox V6 dans stg.import_dictionary_*.
-    Execution cote client : aucun acces fichier requis du service SQL Server.
+    Exécution côté client : aucun accès fichier requis du service SQL Server.
     Utilise SqlBulkCopy (protocole TDS) avec l'authentification Windows du DBA.
 
 .PARAMETER Server
@@ -12,11 +12,11 @@
 
 .PARAMETER CsvPath
     Dossier contenant les 3 CSV.
-    Defaut : dossier du script.
+    Défaut : dossier du script.
 
 .PARAMETER Truncate
     Force la troncature des tables stg.import_* avant chargement,
-    independamment du parametre TruncateLoadTablesBeforeCsvImport dans cfg.Settings.
+    indépendamment du paramètre TruncateLoadTablesBeforeCsvImport dans cfg.Settings.
 
 .EXAMPLE
     .\Load-DictionaryCSV.ps1 -Server MTMD-SQL01 -Database SP_SPR_SmartBox
@@ -42,7 +42,7 @@ catch {
     Write-Error "Impossible de se connecter a $Server.$Database : $_"
     exit 1
 }
-Write-Host "Connecte a $Server / $Database" -ForegroundColor Cyan
+Write-Host "Connecté à $Server / $Database" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
 # Lecture de cfg.Settings
@@ -156,7 +156,7 @@ function Load-CsvTable {
     }
 
     if ($missing.Count -gt 0) {
-        Write-Warning "$TableName : colonnes SQL sans equivalent CSV (seront NULL) : $($missing -join ', ')"
+        Write-Warning "$TableName : colonnes SQL sans équivalent CSV (seront NULL) : $($missing -join ', ')"
     }
 
     # Construire DataTable
@@ -226,5 +226,5 @@ $totalRows += Load-CsvTable `
 $conn.Close()
 
 Write-Host ""
-Write-Host "Chargement termine. Total lignes inserees : $totalRows" -ForegroundColor Cyan
-Write-Host "Prochaine etape : executer v6_05a_Load_Dictionary_From_LoadTables.sql dans SSMS."
+Write-Host "Chargement terminé. Total lignes inserees : $totalRows" -ForegroundColor Cyan
+Write-Host "Prochaine etape : exécuter v6_05a_Load_Dictionary_From_LoadTables.sql dans SSMS."

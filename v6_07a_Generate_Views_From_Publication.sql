@@ -108,7 +108,102 @@ EXEC log.usp_WriteScriptLog
     @Message=@Msg;
 
 /* ===========================================================================================
-   Curseur sur chaque entité avec un binding actif et résolu
+   Nettoyage des vues orphelines dans ProjectData
+   Quand PwaLanguage=FR : supprimer toute vue ProjectData dont le nom correspond au
+   EntityName_EN d'une entité qui possède un EntityName_FR différent.
+   Évite les doublons EN+FR après une re-génération sans v6_00z.
+   =========================================================================================== */
+DECLARE @OrphanSql nvarchar(max);
+DECLARE @OrphanCount int = 0;
+
+IF @PwaLanguage = N'FR'
+BEGIN
+    SELECT @OrphanSql = STRING_AGG(
+        CONVERT(nvarchar(max),
+            N'DROP VIEW IF EXISTS [ProjectData].' + QUOTENAME(eb.EntityName_EN) + N';'),
+        CHAR(10)
+    )
+    FROM dic.EntityBinding eb
+    JOIN sys.views v ON v.name = eb.EntityName_EN
+        AND SCHEMA_NAME(v.schema_id) = N'ProjectData'
+    WHERE eb.EntityName_FR IS NOT NULL
+      AND eb.EntityName_FR <> eb.EntityName_EN
+      AND eb.IsActive = 1;
+
+    IF @OrphanSql IS NOT NULL
+    BEGIN
+        SELECT @OrphanCount = (LEN(@OrphanSql) - LEN(REPLACE(@OrphanSql, N'DROP VIEW', N'')))
+                              / LEN(N'DROP VIEW');
+        EXEC sys.sp_executesql @OrphanSql;
+        SET @Msg = CONCAT(N'Vues orphelines EN supprimées de ProjectData (Language=FR): ', @OrphanCount);
+        EXEC log.usp_WriteScriptLog
+            @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+            @Phase=N'ORPHAN_CLEANUP', @Severity=N'INFO', @Status=N'COMPLETED',
+            @Message=@Msg, @RowsAffected=@OrphanCount;
+    END;
+END
+ELSE IF @PwaLanguage = N'EN'
+BEGIN
+    /* Symétrique : quand Language=EN, supprimer les vues FR orphelines */
+    SELECT @OrphanSql = STRING_AGG(
+        CONVERT(nvarchar(max),
+            N'DROP VIEW IF EXISTS [ProjectData].' + QUOTENAME(eb.EntityName_FR) + N';'),
+        CHAR(10)
+    )
+    FROM dic.EntityBinding eb
+    JOIN sys.views v ON v.name = eb.EntityName_FR
+        AND SCHEMA_NAME(v.schema_id) = N'ProjectData'
+    WHERE eb.EntityName_FR IS NOT NULL
+      AND eb.EntityName_FR <> eb.EntityName_EN
+      AND eb.IsActive = 1;
+
+    IF @OrphanSql IS NOT NULL
+    BEGIN
+        SELECT @OrphanCount = (LEN(@OrphanSql) - LEN(REPLACE(@OrphanSql, N'DROP VIEW', N'')))
+                              / LEN(N'DROP VIEW');
+        EXEC sys.sp_executesql @OrphanSql;
+        SET @Msg = CONCAT(N'Vues orphelines FR supprimées de ProjectData (Language=EN): ', @OrphanCount);
+        EXEC log.usp_WriteScriptLog
+            @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+            @Phase=N'ORPHAN_CLEANUP', @Severity=N'INFO', @Status=N'COMPLETED',
+            @Message=@Msg, @RowsAffected=@OrphanCount;
+    END;
+END;
+
+/* ===========================================================================================
+   Nettoyage des vues orphelines dans tbx_fr
+   tbx_fr génère toujours des noms FR (vw_EntityName_FR). Si un run précédent avait créé
+   des vues EN (vw_EntityName_EN) dans tbx_fr, elles deviennent orphelines.
+   Ce nettoyage s'exécute inconditionnellement (indépendant de PwaLanguage).
+   =========================================================================================== */
+SELECT @OrphanSql = STRING_AGG(
+    CONVERT(nvarchar(max),
+        N'DROP VIEW IF EXISTS [tbx_fr].' + QUOTENAME(N'vw_' + eb.EntityName_EN) + N';'),
+    CHAR(10)
+)
+FROM dic.EntityBinding eb
+JOIN sys.views v ON v.name = CONCAT(N'vw_', eb.EntityName_EN)
+    AND SCHEMA_NAME(v.schema_id) = N'tbx_fr'
+WHERE eb.EntityName_FR IS NOT NULL
+  AND eb.EntityName_FR <> eb.EntityName_EN
+  AND eb.IsActive = 1;
+
+IF @OrphanSql IS NOT NULL
+BEGIN
+    SELECT @OrphanCount = (LEN(@OrphanSql) - LEN(REPLACE(@OrphanSql, N'DROP VIEW', N'')))
+                          / LEN(N'DROP VIEW');
+    EXEC sys.sp_executesql @OrphanSql;
+    SET @Msg = CONCAT(N'Vues orphelines EN supprimées de tbx_fr: ', @OrphanCount);
+    EXEC log.usp_WriteScriptLog
+        @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+        @Phase=N'ORPHAN_CLEANUP', @Severity=N'INFO', @Status=N'COMPLETED',
+        @Message=@Msg, @RowsAffected=@OrphanCount;
+END;
+
+/* ===========================================================================================
+   Curseur sur chaque entité avec un binding actif et résolu.
+   Inclut AUTO_LOW et LOW : les entités à faible couverture génèrent quand même une vue
+   (colonnes non mappées = CAST(NULL)), ce qui est préférable à l'absence de vue.
    =========================================================================================== */
 DECLARE entity_cursor CURSOR LOCAL FAST_FORWARD FOR
     SELECT
@@ -122,7 +217,9 @@ DECLARE entity_cursor CURSOR LOCAL FAST_FORWARD FOR
     FROM dic.EntityBinding eb
     WHERE eb.IsActive = 1
       AND eb.PsseObjectName IS NOT NULL
-      AND eb.ConfidenceLevel IN (N'HIGH', N'MEDIUM', N'AUTO_HIGH', N'AUTO_MEDIUM', N'MANUAL')
+      AND eb.ConfidenceLevel IN (N'HIGH', N'MEDIUM', N'LOW',
+                                  N'AUTO_HIGH', N'AUTO_MEDIUM', N'AUTO_LOW', N'AUTO_LOW_ALT',
+                                  N'MANUAL')
     ORDER BY eb.EntityName_EN;
 
 OPEN entity_cursor;

@@ -164,8 +164,8 @@ GO
       - BD contenu PWA source           : SP_SPR_POC_Contenu.
       - Compte de déploiement utilisé   : MTQ\franbreton.
 =====================================================================================================================*/
-DECLARE @ClientName nvarchar(128) = N'MTMD';                     -- Nom du client ou ministere.
-DECLARE @EnvironmentName nvarchar(30) = N'PROD';                 -- DEV, TEST, QA, PROD, etc.
+DECLARE @ClientName nvarchar(128) = N'MTMD';                     -- Nom du client ou ministère.
+DECLARE @EnvironmentName nvarchar(30) = N'POC';                  -- DEV, TEST, QA, PROD, etc.
 DECLARE @ExpectedDeploymentLogin sysname = N'MTQ\franbreton';    -- Mettre NULL pour ne pas produire d'avertissement de login.
 DECLARE @DesignDatabaseName sysname = N'SPR';                    -- Nom attendu de la base SmartBox cible.
 DECLARE @ContentDbName sysname = N'SP_SPR_POC_Contenu';          -- Nom de la BD contenu PWA source du client.

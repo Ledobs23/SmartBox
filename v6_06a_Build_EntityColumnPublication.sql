@@ -291,6 +291,96 @@ EXEC log.usp_WriteScriptLog
     @RowsAffected=@EntityBindingCount;
 
 /* ===========================================================================================
+   ETAPE A2 : Résolution des bindings partagés
+   Quand 2+ entités sont liées au même objet PSSE, conserver celle dont le nom est le plus
+   proche du nom noyau de l'objet (affinité nominale), puis rechercher un objet alternatif
+   pour les perdants dans stg.ODataPsseExactColumnMatch.
+   Protection : BindingStatus = MANUAL n'est jamais écrasé.
+   =========================================================================================== */
+DECLARE @ConflictCount int = 0;
+
+;WITH
+
+core_names AS (
+    SELECT EntityName_EN, PsseObjectName, PsseSchemaName, CoverageScore, BindingStatus,
+           REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+               PsseObjectName,
+               N'MSP_Epm', N''), N'MSP_Wss', N''), N'MSP_', N''),
+               N'_UserView', N''), N'_ODATAView', N''), N'_OData', N'') AS PsseCoreObject
+    FROM dic.EntityBinding
+    WHERE IsActive = 1 AND PsseObjectName IS NOT NULL AND BindingStatus <> N'MANUAL'
+),
+
+shared_objects AS (
+    SELECT PsseObjectName FROM core_names GROUP BY PsseObjectName HAVING COUNT(*) > 1
+),
+
+conflict_ranked AS (
+    SELECT cn.EntityName_EN, cn.PsseObjectName, cn.PsseSchemaName, cn.CoverageScore,
+           ROW_NUMBER() OVER (
+               PARTITION BY cn.PsseObjectName
+               ORDER BY
+                   CASE
+                       WHEN cn.PsseCoreObject = cn.EntityName_EN                   THEN 0
+                       WHEN cn.EntityName_EN LIKE cn.PsseCoreObject + N'%'        THEN 1
+                       WHEN cn.PsseCoreObject LIKE N'%' + cn.EntityName_EN + N'%' THEN 2
+                       ELSE 3
+                   END,
+                   cn.CoverageScore DESC,
+                   cn.EntityName_EN
+           ) AS rn
+    FROM core_names cn
+    WHERE cn.PsseObjectName IN (SELECT PsseObjectName FROM shared_objects)
+),
+
+alt_bindings AS (
+    SELECT m.EntityName_EN,
+           m.PsseSchemaName AS AltSchema,
+           m.PsseObjectName AS AltObject,
+           ROUND(CAST(COUNT(*) AS decimal(10,2)) / NULLIF(tot.TotalPrimitiveCols, 0) * 100, 2) AS AltScore,
+           ROW_NUMBER() OVER (PARTITION BY m.EntityName_EN ORDER BY COUNT(*) DESC, m.PsseObjectName) AS alt_rn
+    FROM stg.ODataPsseExactColumnMatch m
+    JOIN (
+        SELECT EntityName_EN, COUNT(*) AS TotalPrimitiveCols
+        FROM dic.EntityColumnMap WHERE ColumnClassification = N'PRIMITIVE'
+        GROUP BY EntityName_EN
+    ) tot ON tot.EntityName_EN = m.EntityName_EN
+    WHERE m.MatchType = N'EXACT'
+      AND m.PsseObjectName NOT IN (SELECT PsseObjectName FROM conflict_ranked WHERE rn = 1)
+      AND m.EntityName_EN IN (SELECT EntityName_EN FROM conflict_ranked WHERE rn > 1)
+    GROUP BY m.EntityName_EN, m.PsseSchemaName, m.PsseObjectName, tot.TotalPrimitiveCols
+)
+
+UPDATE dic.EntityBinding
+SET PsseObjectName     = CASE WHEN ab.AltObject IS NOT NULL THEN ab.AltObject    ELSE NULL END,
+    PsseSchemaName     = CASE WHEN ab.AltObject IS NOT NULL THEN ab.AltSchema    ELSE NULL END,
+    SmartBoxSchemaName = CASE WHEN ab.AltObject IS NOT NULL THEN CONVERT(sysname, N'src_' + ab.AltSchema) ELSE NULL END,
+    CoverageScore      = CASE WHEN ab.AltObject IS NOT NULL THEN ab.AltScore     ELSE 0 END,
+    ConfidenceLevel    = CASE WHEN ab.AltObject IS NOT NULL THEN N'LOW'          ELSE N'NONE' END,
+    BindingStatus      = CASE WHEN ab.AltObject IS NOT NULL THEN N'AUTO_LOW_ALT' ELSE N'SHARED_CONFLICT' END,
+    IsActive           = CASE WHEN ab.AltObject IS NOT NULL THEN 1               ELSE 0 END,
+    UpdatedOn          = sysdatetime(),
+    UpdatedBy          = suser_sname()
+FROM dic.EntityBinding eb
+JOIN conflict_ranked cr ON cr.EntityName_EN = eb.EntityName_EN AND cr.rn > 1
+LEFT JOIN alt_bindings ab ON ab.EntityName_EN = eb.EntityName_EN AND ab.alt_rn = 1
+WHERE eb.BindingStatus <> N'MANUAL';
+
+SET @ConflictCount = @@ROWCOUNT;
+
+IF @ConflictCount > 0
+BEGIN
+    SET @Msg = CONCAT(N'Conflits de binding résolus: ', @ConflictCount,
+                      N' entités relocalises (AUTO_LOW_ALT) ou marquees SHARED_CONFLICT.',
+                      N' Verifier dic.EntityBinding WHERE BindingStatus IN (''SHARED_CONFLICT'',''AUTO_LOW_ALT'').');
+    EXEC log.usp_WriteScriptLog
+        @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+        @Phase=N'BINDING_CONFLICT', @Severity=N'WARNING', @Status=N'WARNING',
+        @Message=@Msg,
+        @RowsAffected=@ConflictCount;
+END;
+
+/* ===========================================================================================
    ETAPE B : stg.EntityJoin_Draft
    Detecter les colonnes PSSE provenant d'une source secondaire (differente de dic.EntityBinding).
    Pour chaque source secondaire par entité, proposer une expression de jointure en cherchant

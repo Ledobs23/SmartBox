@@ -14,8 +14,10 @@
     - Colonnes UNMAPPED   : FallbackExpression (CAST NULL) AS alias
     - Colonnes NAVIGATION sans source : CAST(NULL AS nvarchar(255)) AS alias
     - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'a resolution.
-    - La vue ProjectData.<EntityName_EN> est toujours generee avec les noms EN (contrat OData).
-    - La vue tbx_fr.<EntityName_EN> est generee avec les alias FR si Column_FR est renseigne.
+    - ProjectData : nom de vue = EntityName_FR si PwaLanguage=FR (ex. Projets), EntityName_EN sinon (ex. Projects).
+                   Aliases colonnes = Column_FR si PwaLanguage=FR, Column_EN sinon.
+    - tbx_fr     : nom de vue = vw_EntityName_FR (ex. vw_Projets), aliases Column_FR (toujours FR).
+    - tbx        : nom de vue = vw_EntityName_EN, aliases Column_EN (toujours EN, couche interne).
     - En cas d'erreur sur une entite : log + continuation sur les entites suivantes.
     - Journalisation dans log.ScriptExecutionLog et report.ViewStackValidation.
 =====================================================================================================================*/
@@ -206,12 +208,17 @@ BEGIN
       AND ecp.IsPublished = 1;
 
     /* ---------------------------------------------------------------------------------
-       Generer ProjectData.<EntityName_EN> avec alias selon PwaLanguage
+       Generer ProjectData.<EntityName_FR ou EN selon PwaLanguage> avec alias selon PwaLanguage
+       Le nom de vue suit la langue du tenant : si FR -> EntityName_FR (ex. Projets),
+       si EN -> EntityName_EN (ex. Projects).
        --------------------------------------------------------------------------------- */
     IF @GenProjectData = 1 AND @ColListEN IS NOT NULL
     BEGIN
         SET @ViewSchema = N'ProjectData';
-        SET @ViewName   = @EntityName_EN;
+        SET @ViewName   = CASE WHEN @PwaLanguage = N'FR'
+                               THEN ISNULL(@EntityName_FR, @EntityName_EN)
+                               ELSE @EntityName_EN
+                          END;
 
         SET @ViewSql = CONCAT(
             N'CREATE OR ALTER VIEW ', QUOTENAME(@ViewSchema), N'.', QUOTENAME(@ViewName), N' AS',

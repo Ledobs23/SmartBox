@@ -1,25 +1,28 @@
 /*=====================================================================================================================
     v6_00z_Reset_SmartBox_V6_Working_Tables.sql
     Projet      : SmartBox
-    Phase       : 00z - Outil de reprise / nettoyage V6
-    Role        : Remettre la base a zero avant de rejouer le pipeline 02a -> 07a.
+    Phase       : 00z - Remise a zero avant de rejouer le pipeline
 
-    Modes disponibles (modifier les parametres ci-dessous) :
+    Comportement par defaut
     -------------------------------------------------------
-    Mode SOFT (defaut) : vide les donnees, conserve la structure des tables.
-        -> Rejouer 03a -> 07a suffit apres un soft reset.
+    DROP TABLE de TOUTES les tables de la base, sauf cfg.PWA et cfg.Settings.
+    Cela permet de rejouer le pipeline complet 02a -> 07a sur une base propre.
+    cfg.PWA et cfg.Settings contiennent la configuration du tenant : ils sont
+    TOUJOURS preserves afin que v6_02a puisse appliquer ses MERGE sans ressaisie.
 
-    Mode HARD (@DropWorkingTables = 1) : supprime les tables de travail V6 en entier.
-        -> Necessaire quand la structure des tables a change (evolution de schema).
-        -> Rejouer 02a -> 07a apres un hard reset.
+    Vues ProjectData / tbx / tbx_fr / tbx_master   : toujours supprimees.
+    Synonymes src_*                                  : toujours supprimes.
+    log.ScriptExecutionLog et toutes les autres tables : supprimees.
 
-    Dans les deux modes : cfg.Settings et cfg.PWA sont TOUJOURS preserves.
-    Les synonymes src_* et les vues ProjectData/tbx/tbx_fr/tbx_master sont toujours supprimes.
-
-    Protection double-securite
+    Schemas touches par le nettoyage
     -------------------------------------------------------
-    @ClearSettings = 1  ET  @AllowClearProtectedConfig = 1  pour vider cfg.Settings/cfg.PWA.
-    Ne jamais mettre ces flags sans etre certain de vouloir resaisir toute la configuration.
+    stg | dic | load | review | report | log | cfg (hors PWA et Settings)
+
+    Pour vider aussi cfg.PWA et cfg.Settings (reinstallation complete)
+    -------------------------------------------------------
+    Mettre @ClearSettings = 1  ET  @AllowClearProtectedConfig = 1.
+    Ne jamais activer ces flags sans etre certain de vouloir ressaisir
+    toute la configuration dans v6_02a.
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -30,262 +33,158 @@ IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 GO
 
 /*=====================================================================================================================
-    PARAMETRES DBA - SECTION A MODIFIER AU BESOIN
+    PARAMETRES DBA
 =====================================================================================================================*/
-DECLARE @ExpectedDatabaseName    sysname = N'SPR';
-
-/* --- Objets generes --- */
-DECLARE @DropGeneratedViews      bit = 1;   -- Supprime vues ProjectData/tbx/tbx_fr/tbx_master
-
-DECLARE @DropSourceSynonyms      bit = 1;   -- Supprime synonymes src_*
-
-/* --- Mode de nettoyage --- */
-DECLARE @DropWorkingTables       bit = 0;   -- 0=TRUNCATE (soft), 1=DROP TABLE (hard - resaisir v02a->v07a)
+DECLARE @ExpectedDatabaseName      sysname = N'SPR';
 
 /* --- Zones protegees (double confirmation requise) --- */
-DECLARE @ClearExecutionLog       bit = 0;   -- 1 = vide log.ScriptExecutionLog
-DECLARE @ClearSettings           bit = 0;   -- 1 = vide cfg.Settings, cfg.PWA, cfg.PwaSchemaScope
-DECLARE @AllowClearProtectedConfig bit = 0; -- Mettre a 1 pour confirmer les deux lignes ci-dessus
+DECLARE @ClearSettings             bit = 0;   -- 1 = supprime aussi cfg.Settings et cfg.PWA
+DECLARE @AllowClearProtectedConfig bit = 0;   -- Mettre a 1 pour confirmer @ClearSettings
 
 /* =====================================================================================================================
    NE PAS MODIFIER EN DESSOUS DE CETTE LIGNE
    =================================================================================================================== */
 DECLARE @Sql  nvarchar(max);
-DECLARE @Msg  nvarchar(500);
+DECLARE @Cnt  int;
 
 IF DB_NAME() <> @ExpectedDatabaseName
     THROW 60002, N'La base courante ne correspond pas a @ExpectedDatabaseName. Modifier le parametre.', 1;
 
-IF (@ClearExecutionLog = 1 OR @ClearSettings = 1) AND @AllowClearProtectedConfig = 0
-    THROW 60003, N'ClearExecutionLog/ClearSettings demande. Mettre @AllowClearProtectedConfig = 1 pour confirmer.', 1;
+IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 0
+    THROW 60003, N'ClearSettings demande. Mettre @AllowClearProtectedConfig = 1 pour confirmer.', 1;
 
-PRINT N'=== SmartBox V6 reset START === Mode=' + CASE WHEN @DropWorkingTables = 1 THEN N'HARD (DROP)' ELSE N'SOFT (TRUNCATE)' END;
+PRINT N'=== SmartBox V6 reset START ===';
 PRINT N'Database=' + DB_NAME();
 
 /* ===========================================================================================
    1. Vues generees (ProjectData / tbx / tbx_fr / tbx_master)
    =========================================================================================== */
-IF @DropGeneratedViews = 1
-BEGIN
-    SELECT @Sql = STRING_AGG(
-        CONVERT(nvarchar(max),
-            N'DROP VIEW IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(v.name) + N';'),
-        CHAR(10)
-    ) WITHIN GROUP (ORDER BY
-        CASE s.name WHEN N'ProjectData' THEN 1 WHEN N'tbx_fr' THEN 2 WHEN N'tbx' THEN 3 ELSE 4 END,
-        v.name)
-    FROM sys.views v
-    JOIN sys.schemas s ON s.schema_id = v.schema_id
-    WHERE s.name IN (N'ProjectData', N'tbx', N'tbx_fr', N'tbx_master');
+SELECT @Sql = STRING_AGG(
+    CONVERT(nvarchar(max),
+        N'DROP VIEW IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(v.name) + N';'),
+    CHAR(10)
+) WITHIN GROUP (ORDER BY
+    CASE s.name WHEN N'ProjectData' THEN 1 WHEN N'tbx_fr' THEN 2 WHEN N'tbx' THEN 3 ELSE 4 END,
+    v.name)
+FROM sys.views v
+JOIN sys.schemas s ON s.schema_id = v.schema_id
+WHERE s.name IN (N'ProjectData', N'tbx', N'tbx_fr', N'tbx_master');
 
-    IF @Sql IS NOT NULL
-        EXEC sys.sp_executesql @Sql;
-    PRINT N'[1] Views dropped: ' + ISNULL(CAST(LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP VIEW', N'')) AS nvarchar) + N'/9', N'0');
-    SET @Sql = NULL;
+SET @Cnt = 0;
+IF @Sql IS NOT NULL
+BEGIN
+    SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP VIEW', N''))) / LEN(N'DROP VIEW');
+    EXEC sys.sp_executesql @Sql;
 END;
+PRINT N'[1] Vues supprimees : ' + CAST(@Cnt AS nvarchar) + N'.';
+SET @Sql = NULL;
 
 /* ===========================================================================================
    2. Synonymes src_*
    =========================================================================================== */
-IF @DropSourceSynonyms = 1
-BEGIN
-    SELECT @Sql = STRING_AGG(
-        CONVERT(nvarchar(max),
-            N'DROP SYNONYM IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(sy.name) + N';'),
-        CHAR(10)
-    ) WITHIN GROUP (ORDER BY s.name, sy.name)
-    FROM sys.synonyms sy
-    JOIN sys.schemas s ON s.schema_id = sy.schema_id
-    WHERE s.name LIKE N'src[_]%';
+SELECT @Sql = STRING_AGG(
+    CONVERT(nvarchar(max),
+        N'DROP SYNONYM IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(sy.name) + N';'),
+    CHAR(10)
+) WITHIN GROUP (ORDER BY s.name, sy.name)
+FROM sys.synonyms sy
+JOIN sys.schemas s ON s.schema_id = sy.schema_id
+WHERE s.name LIKE N'src[_]%';
 
-    IF @Sql IS NOT NULL
-        EXEC sys.sp_executesql @Sql;
-    PRINT N'[2] Synonyms dropped.';
-    SET @Sql = NULL;
+SET @Cnt = 0;
+IF @Sql IS NOT NULL
+BEGIN
+    SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP SYNONYM', N''))) / LEN(N'DROP SYNONYM');
+    EXEC sys.sp_executesql @Sql;
 END;
+PRINT N'[2] Synonymes supprimes : ' + CAST(@Cnt AS nvarchar) + N'.';
+SET @Sql = NULL;
 
 /* ===========================================================================================
-   3. Tables de travail V6
-   Toutes les tables sauf cfg.Settings, cfg.PWA et (optionnel) log.ScriptExecutionLog.
+   3. Toutes les tables de travail
+   Schemas : stg | dic | load | review | report | log
+             cfg  (toutes sauf cfg.PWA et cfg.Settings)
+   Approche dynamique : interroge sys.tables -> aucune liste a maintenir.
+   Ordre : les tables avec FK enfants en premier (cfg.PwaSchemaScope avant cfg.PWA).
    =========================================================================================== */
 
-/* Helper inline : TRUNCATE ou DROP selon le mode */
+/* 3a. Tables avec FK potentielles vers cfg.PWA — a supprimer en premier */
+SELECT @Sql = STRING_AGG(
+    CONVERT(nvarchar(max),
+        N'DROP TABLE IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';'),
+    CHAR(10)
+) WITHIN GROUP (ORDER BY t.name)
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE s.name = N'cfg'
+  AND t.name NOT IN (N'PWA', N'Settings');
 
-/* --- stg.* --- */
-DECLARE @stgTables TABLE (TableName nvarchar(256));
-INSERT INTO @stgTables VALUES
-    (N'stg.ColumnInventory'),
-    (N'stg.ObjectInventory'),
-    (N'stg.import_dictionary_od_fields'),
-    (N'stg.import_dictionary_lookup_entries'),
-    (N'stg.import_dictionary_projectdata_alias'),
-    (N'stg.ODataPsseExactColumnMatch'),
-    (N'stg.EntitySource_Draft'),
-    (N'stg.DictionaryQualityIssue'),
-    (N'stg.EntityJoin_Draft'),
-    (N'stg.ODataPsseMap_Draft'),
-    (N'stg.EntityDraftBuildLog'),
-    (N'stg.RunLog');
+IF @Sql IS NOT NULL EXEC sys.sp_executesql @Sql;
+SET @Sql = NULL;
 
-/* --- cfg.* (hors Settings et PWA) --- */
-DECLARE @cfgTables TABLE (TableName nvarchar(256));
-INSERT INTO @cfgTables VALUES
-    (N'cfg.PwaObjectScope'),
-    (N'cfg.PwaSchemaScope'),
-    (N'cfg.dictionary_od_fields'),
-    (N'cfg.dictionary_lookup_entries'),
-    (N'cfg.dictionary_projectdata_alias');
+/* 3b. Toutes les autres tables de travail */
+SELECT @Sql = STRING_AGG(
+    CONVERT(nvarchar(max),
+        N'DROP TABLE IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';'),
+    CHAR(10)
+) WITHIN GROUP (ORDER BY s.name, t.name)
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE s.name IN (N'stg', N'dic', N'load', N'review', N'report', N'log');
 
-/* --- dic.* --- */
-DECLARE @dicTables TABLE (TableName nvarchar(256));
-INSERT INTO @dicTables VALUES
-    (N'dic.EntityColumnPublication'),
-    (N'dic.EntityJoin'),
-    (N'dic.EntityBinding'),
-    (N'dic.EntityColumnMap'),
-    (N'dic.Entity'),
-    (N'dic.LookupMap');
-
-/* --- load.* --- */
-DECLARE @loadTables TABLE (TableName nvarchar(256));
-INSERT INTO @loadTables VALUES
-    (N'load.ProjectDataFields'),
-    (N'load.ProjectServerLookupEntries'),
-    (N'load.ProjectDataAlias'),
-    (N'load.LoadBatch');
-
-/* --- review.* --- */
-DECLARE @reviewTables TABLE (TableName nvarchar(256));
-INSERT INTO @reviewTables VALUES
-    (N'review.ManualJoinOverride'),
-    (N'review.ManualColumnOverride'),
-    (N'review.ReconstructionDecision');
-
-/* --- report.* --- */
-DECLARE @reportTables TABLE (TableName nvarchar(256));
-INSERT INTO @reportTables VALUES
-    (N'report.ViewStackValidation'),
-    (N'report.BlockingErrorReport'),
-    (N'report.DictionaryQualityReport'),
-    (N'report.FoundationCheckResult');
-
-/* Construire et executer le SQL de nettoyage pour un groupe */
-DECLARE @GroupName nvarchar(50);
-
-DECLARE table_group CURSOR LOCAL FAST_FORWARD FOR
-    SELECT N'stg.*',    TableName FROM @stgTables
-    UNION ALL
-    SELECT N'cfg.*',    TableName FROM @cfgTables
-    UNION ALL
-    SELECT N'dic.*',    TableName FROM @dicTables
-    UNION ALL
-    SELECT N'load.*',   TableName FROM @loadTables
-    UNION ALL
-    SELECT N'review.*', TableName FROM @reviewTables
-    UNION ALL
-    SELECT N'report.*', TableName FROM @reportTables;
-
-DECLARE @CurrentGroup nvarchar(50);
-DECLARE @TableName    nvarchar(256);
-DECLARE @LastGroup    nvarchar(50) = N'';
-DECLARE @ActionCount  int = 0;
-
-OPEN table_group;
-FETCH NEXT FROM table_group INTO @CurrentGroup, @TableName;
-
-WHILE @@FETCH_STATUS = 0
+SET @Cnt = 0;
+IF @Sql IS NOT NULL
 BEGIN
-    IF @CurrentGroup <> @LastGroup AND @LastGroup <> N''
-    BEGIN
-        PRINT N'[3] ' + @LastGroup + N' : ' + CAST(@ActionCount AS nvarchar) + N' tables traitees.';
-        SET @ActionCount = 0;
-    END;
-    SET @LastGroup = @CurrentGroup;
-
-    IF OBJECT_ID(@TableName, N'U') IS NOT NULL
-    BEGIN
-        IF @DropWorkingTables = 1
-            SET @Sql = N'DROP TABLE ' + @TableName + N';';
-        ELSE
-            SET @Sql = N'TRUNCATE TABLE ' + @TableName + N';';
-
-        EXEC sys.sp_executesql @Sql;
-        SET @ActionCount += 1;
-    END;
-
-    FETCH NEXT FROM table_group INTO @CurrentGroup, @TableName;
+    SELECT @Cnt = (LEN(@Sql) - LEN(REPLACE(@Sql, N'DROP TABLE', N''))) / LEN(N'DROP TABLE');
+    EXEC sys.sp_executesql @Sql;
 END;
-
-IF @LastGroup <> N''
-    PRINT N'[3] ' + @LastGroup + N' : ' + CAST(@ActionCount AS nvarchar) + N' tables traitees.';
-
-CLOSE table_group;
-DEALLOCATE table_group;
+PRINT N'[3] Tables de travail supprimees (stg/dic/load/review/report/log/cfg hors PWA+Settings) : '
+      + CAST(@Cnt AS nvarchar) + N'.';
+SET @Sql = NULL;
 
 /* ===========================================================================================
-   4. Zones protegees (log + config)
+   4. cfg.Settings et cfg.PWA (double securite uniquement)
    =========================================================================================== */
-IF @ClearExecutionLog = 1 AND @AllowClearProtectedConfig = 1
-BEGIN
-    IF OBJECT_ID(N'log.ScriptExecutionLog', N'U') IS NOT NULL
-    BEGIN
-        IF @DropWorkingTables = 1
-            DROP TABLE log.ScriptExecutionLog;
-        ELSE
-            TRUNCATE TABLE log.ScriptExecutionLog;
-        PRINT N'[4] log.ScriptExecutionLog cleared.';
-    END;
-END;
-
 IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 1
 BEGIN
-    IF OBJECT_ID(N'cfg.PwaSchemaScope', N'U') IS NOT NULL DELETE FROM cfg.PwaSchemaScope;
-    IF OBJECT_ID(N'cfg.PWA', N'U') IS NOT NULL
-    BEGIN
-        IF @DropWorkingTables = 1
-            DROP TABLE cfg.PWA;
-        ELSE
-            DELETE FROM cfg.PWA;
-    END;
-    IF OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL
-    BEGIN
-        IF @DropWorkingTables = 1
-            DROP TABLE cfg.Settings;
-        ELSE
-            DELETE FROM cfg.Settings;
-    END;
-    PRINT N'[4] cfg.Settings, cfg.PWA, cfg.PwaSchemaScope cleared.';
-END;
+    IF OBJECT_ID(N'cfg.PWA',      N'U') IS NOT NULL DROP TABLE cfg.PWA;
+    IF OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL DROP TABLE cfg.Settings;
+    PRINT N'[4] cfg.Settings et cfg.PWA supprimes (reinstallation complete).';
+END
+ELSE
+    PRINT N'[4] cfg.Settings et cfg.PWA preserves.';
 
 /* ===========================================================================================
    5. Rapport final
    =========================================================================================== */
-PRINT N'=== SmartBox V6 reset COMPLETED ===';
+PRINT N'=== SmartBox V6 reset COMPLETED. Rejouer 02a -> 07a. ===';
 
 SELECT
-    N'Views remaining'     AS Item, COUNT(*) AS Remaining
-FROM sys.views v
-JOIN sys.schemas s ON s.schema_id = v.schema_id
-WHERE s.name IN (N'ProjectData', N'tbx', N'tbx_fr', N'tbx_master')
+    N'cfg.Settings lignes preservees' AS Item,
+    CASE WHEN OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL
+         THEN (SELECT COUNT(*) FROM cfg.Settings) ELSE 0 END AS Valeur
 UNION ALL
-SELECT N'Synonyms remaining', COUNT(*)
-FROM sys.synonyms sy
-JOIN sys.schemas s ON s.schema_id = sy.schema_id
-WHERE s.name LIKE N'src[_]%'
+SELECT N'cfg.PWA lignes preservees',
+    CASE WHEN OBJECT_ID(N'cfg.PWA', N'U') IS NOT NULL
+         THEN (SELECT COUNT(*) FROM cfg.PWA) ELSE 0 END
 UNION ALL
-SELECT N'cfg.Settings rows',
-    CASE WHEN OBJECT_ID(N'cfg.Settings',N'U') IS NOT NULL
-         THEN (SELECT COUNT(*) FROM cfg.Settings) ELSE -1 END
+SELECT N'Tables restantes dans dic/stg/load/review/report/log',
+    (SELECT COUNT(*) FROM sys.tables t
+     JOIN sys.schemas s ON s.schema_id = t.schema_id
+     WHERE s.name IN (N'stg', N'dic', N'load', N'review', N'report', N'log'))
 UNION ALL
-SELECT N'cfg.PWA rows',
-    CASE WHEN OBJECT_ID(N'cfg.PWA',N'U') IS NOT NULL
-         THEN (SELECT COUNT(*) FROM cfg.PWA) ELSE -1 END
+SELECT N'Tables cfg restantes (hors PWA+Settings)',
+    (SELECT COUNT(*) FROM sys.tables t
+     JOIN sys.schemas s ON s.schema_id = t.schema_id
+     WHERE s.name = N'cfg' AND t.name NOT IN (N'PWA', N'Settings'))
 UNION ALL
-SELECT N'dic.EntityColumnPublication rows',
-    CASE WHEN OBJECT_ID(N'dic.EntityColumnPublication',N'U') IS NOT NULL
-         THEN (SELECT COUNT(*) FROM dic.EntityColumnPublication) ELSE -1 END
+SELECT N'Vues restantes (ProjectData/tbx/tbx_fr/tbx_master)',
+    (SELECT COUNT(*) FROM sys.views v
+     JOIN sys.schemas s ON s.schema_id = v.schema_id
+     WHERE s.name IN (N'ProjectData', N'tbx', N'tbx_fr', N'tbx_master'))
 UNION ALL
-SELECT N'stg.ColumnInventory rows',
-    CASE WHEN OBJECT_ID(N'stg.ColumnInventory',N'U') IS NOT NULL
-         THEN (SELECT COUNT(*) FROM stg.ColumnInventory) ELSE -1 END;
+SELECT N'Synonymes src_* restants',
+    (SELECT COUNT(*) FROM sys.synonyms sy
+     JOIN sys.schemas s ON s.schema_id = sy.schema_id
+     WHERE s.name LIKE N'src[_]%');
 GO

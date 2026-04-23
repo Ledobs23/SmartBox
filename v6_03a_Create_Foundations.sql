@@ -4,10 +4,17 @@
     Phase       : 03a - Fondations V6
     Role        : Creer les schemas, tables, inventaire PSSE et synonymes source requis par V6.
 
+    Contrat de schemas
+    - stg    : donnees brutes temporaires (inventaire PSSE, import CSV via Load-DictionaryCSV.ps1)
+    - dic    : dictionnaire normalise exploitable (apres v6_05a)
+    - cfg    : configuration du tenant (PWA, Settings, scopes)
+    - review : decisions et corrections manuelles
+    - report : resultats de controle qualite
+    - log    : journal d'execution des scripts
+
     Notes V6
-    - Cree les schemas `load`, `review`, `report` et `log`.
-    - Ne cree pas de table physique stg.RunLog.
-    - Les tables load.* remplacent les CSV comme source courante du pipeline.
+    - Le chargement des CSV du dictionnaire est fait par Load-DictionaryCSV.ps1 (SqlBulkCopy -> stg.import_dictionary_*).
+    - Le schema `load` est obsolete et n'est pas cree.
     - Lit cfg.Settings et cfg.PwaSchemaScope pour inventorier la BD content PSSE et creer les synonymes.
 
     Structure en 4 lots GO:
@@ -40,9 +47,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'tbx') EXEC(N'CREATE SCHE
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'tbx_fr') EXEC(N'CREATE SCHEMA tbx_fr AUTHORIZATION dbo;');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'tbx_master') EXEC(N'CREATE SCHEMA tbx_master AUTHORIZATION dbo;');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'ProjectData') EXEC(N'CREATE SCHEMA ProjectData AUTHORIZATION dbo;');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'dim') EXEC(N'CREATE SCHEMA dim AUTHORIZATION dbo;');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'fact') EXEC(N'CREATE SCHEMA fact AUTHORIZATION dbo;');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'load') EXEC(N'CREATE SCHEMA load AUTHORIZATION dbo;');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'review') EXEC(N'CREATE SCHEMA review AUTHORIZATION dbo;');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'report') EXEC(N'CREATE SCHEMA report AUTHORIZATION dbo;');
 GO
@@ -113,90 +117,6 @@ BEGIN
 
     CREATE INDEX IX_stg_ColumnInventory_Column
         ON stg.ColumnInventory (PWAId, SourceDatabaseName, SourceSchemaName, SourceObjectName, ColumnName);
-END;
-
-IF OBJECT_ID(N'load.LoadBatch', N'U') IS NULL
-BEGIN
-    CREATE TABLE load.LoadBatch
-    (
-        LoadBatchId     bigint IDENTITY(1,1) NOT NULL,
-        LoadName        nvarchar(128) NOT NULL,
-        SourceName      nvarchar(256) NULL,
-        SourceMode      nvarchar(30) NOT NULL CONSTRAINT DF_load_LoadBatch_SourceMode DEFAULT(N'TOOL'),
-        LoadStatus      nvarchar(30) NOT NULL CONSTRAINT DF_load_LoadBatch_LoadStatus DEFAULT(N'LOADED'),
-        StartedAt       datetime2(0) NOT NULL CONSTRAINT DF_load_LoadBatch_StartedAt DEFAULT(sysdatetime()),
-        CompletedAt     datetime2(0) NULL,
-        LoadedBy        sysname NOT NULL CONSTRAINT DF_load_LoadBatch_LoadedBy DEFAULT(suser_sname()),
-        Notes           nvarchar(4000) NULL,
-        CONSTRAINT PK_load_LoadBatch PRIMARY KEY (LoadBatchId)
-    );
-END;
-
-IF OBJECT_ID(N'load.ProjectDataFields', N'U') IS NULL
-BEGIN
-    CREATE TABLE load.ProjectDataFields
-    (
-        LoadBatchId     bigint NULL,
-        SourceSystem    nvarchar(128) NULL,
-        EntityName      nvarchar(256) NULL,
-        FieldName       nvarchar(256) NULL,
-        LogicalType     nvarchar(128) NULL,
-        TypeName        nvarchar(128) NULL,
-        IsNullableRaw   nvarchar(20) NULL,
-        LoadedOn        datetime2(0) NOT NULL CONSTRAINT DF_load_ProjectDataFields_LoadedOn DEFAULT(sysdatetime()),
-        LoadedBy        sysname NOT NULL CONSTRAINT DF_load_ProjectDataFields_LoadedBy DEFAULT(suser_sname())
-    );
-END;
-
-IF OBJECT_ID(N'load.ProjectServerLookupEntries', N'U') IS NULL
-BEGIN
-    CREATE TABLE load.ProjectServerLookupEntries
-    (
-        LoadBatchId      bigint NULL,
-        LookupTableId    nvarchar(64) NULL,
-        LookupTableName  nvarchar(256) NULL,
-        EntryId          nvarchar(64) NULL,
-        EntryCode        nvarchar(256) NULL,
-        EntryLabel       nvarchar(512) NULL,
-        ParentEntryId    nvarchar(64) NULL,
-        EntityType       nvarchar(128) NULL,
-        CustomFieldId    nvarchar(64) NULL,
-        CustomFieldName  nvarchar(256) NULL,
-        FieldType        nvarchar(128) NULL,
-        SourceSystem     nvarchar(128) NULL,
-        LoadedOn         datetime2(0) NOT NULL CONSTRAINT DF_load_ProjectServerLookupEntries_LoadedOn DEFAULT(sysdatetime()),
-        LoadedBy         sysname NOT NULL CONSTRAINT DF_load_ProjectServerLookupEntries_LoadedBy DEFAULT(suser_sname())
-    );
-END;
-
-IF OBJECT_ID(N'load.ProjectDataAlias', N'U') IS NULL
-BEGIN
-    CREATE TABLE load.ProjectDataAlias
-    (
-        LoadBatchId                  bigint NULL,
-        Endpoint_EN                  nvarchar(256) NULL,
-        Endpoint_FR                  nvarchar(256) NULL,
-        EndpointMatchCountRaw        nvarchar(30) NULL,
-        EndPointMatchStatus          nvarchar(50) NULL,
-        PrimitiveColumnCount_ENRaw   nvarchar(30) NULL,
-        PrimitiveColumnCount_FRRaw   nvarchar(30) NULL,
-        ColumnPositionRaw            nvarchar(30) NULL,
-        Column_EN                    nvarchar(256) NULL,
-        Column_FR                    nvarchar(256) NULL,
-        ColumnClassification         nvarchar(30) NULL,
-        Kind_EN                      nvarchar(128) NULL,
-        TypeName_EN                  nvarchar(128) NULL,
-        IsNullable_ENRaw             nvarchar(20) NULL,
-        Kind_FR                      nvarchar(128) NULL,
-        TypeName_FR                  nvarchar(128) NULL,
-        IsNullable_FRRaw             nvarchar(20) NULL,
-        PositionMatchRaw             nvarchar(20) NULL,
-        TypeMatchRaw                 nvarchar(20) NULL,
-        NullabilityMatchRaw          nvarchar(20) NULL,
-        ColumnMatchStatus            nvarchar(50) NULL,
-        LoadedOn                     datetime2(0) NOT NULL CONSTRAINT DF_load_ProjectDataAlias_LoadedOn DEFAULT(sysdatetime()),
-        LoadedBy                     sysname NOT NULL CONSTRAINT DF_load_ProjectDataAlias_LoadedBy DEFAULT(suser_sname())
-    );
 END;
 
 IF OBJECT_ID(N'stg.import_dictionary_od_fields', N'U') IS NULL
@@ -695,7 +615,7 @@ SELECT
 FROM sys.objects AS o
 INNER JOIN sys.schemas AS s
     ON s.schema_id = o.schema_id
-WHERE s.name IN (N'cfg', N'log', N'load', N'review', N'report', N'stg', N'src_pjrep', N'src_pjpub')
+WHERE s.name IN (N'cfg', N'log', N'review', N'report', N'stg', N'dic', N'src_pjrep', N'src_pjpub')
 ORDER BY s.name, o.name;
 
 SELECT

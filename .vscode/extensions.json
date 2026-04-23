@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "ms-mssql.mssql",
+    "ms-mssql.data-workspace-vscode",
+    "ms-mssql.sql-database-projects-vscode",
+    "ms-mssql.sql-bindings-vscode",
+    "mechatroner.rainbow-csv"
+  ]
+}

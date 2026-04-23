@@ -1,0 +1,24 @@
+{
+  "mssql.connectionGroups": [
+    {
+      "id": "ROOT",
+      "name": "ROOT"
+    }
+  ],
+  "mssql.connections": [
+    {
+      "profileName": "BDI_SPR-POC",
+      "server": "sdevl01-sd2215\\sd2215",
+      "database": "SPR",
+      "authenticationType": "Integrated",
+      "encrypt": "Mandatory",
+      "trustServerCertificate": true,
+      "groupId": "ROOT"
+    }
+  ],
+  "mssql.autoDisableNonTSqlLanguageService": true,
+  "files.associations": {
+    "*.sql": "sql",
+    "*.ps1": "powershell"
+  }
+}

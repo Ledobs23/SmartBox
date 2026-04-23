@@ -1,0 +1,19 @@
+# Local tool/session folders
+.claude/
+
+# Local network/proxy artifact
+api.anthropic.com
+
+# Generated diagnostic output
+_debug_*.sql
+_debug_*.txt
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+~$*

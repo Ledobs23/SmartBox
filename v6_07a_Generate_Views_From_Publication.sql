@@ -1,9 +1,9 @@
 /*=====================================================================================================================
     v6_07a_Generate_Views_From_Publication.sql
     Projet      : SmartBox
-    Phase       : 07a - Generation dynamique des vues ProjectData depuis dic.EntityColumnPublication
-    Role        : Generer les vues ProjectData.* et tbx_fr.* a partir de la couche de publication
-                  canonique. Remplace le snapshot fige de v6_04a pour les régénérations futures.
+    Phase       : 07a - Génération dynamique des vues ProjectData depuis dic.EntityColumnPublication
+    Role        : Générer les vues ProjectData.* et tbx_fr.* à partir de la couche de publication
+                  canonique. Remplace le snapshot figé de v6_04a pour les régénérations futures.
 
     Notes V6
     - Prérequis : v6_06a exécuté (dic.EntityBinding, dic.EntityJoin, dic.EntityColumnPublication).
@@ -13,7 +13,7 @@
     - Colonnes MAPPED     : SourceExpression AS alias
     - Colonnes UNMAPPED   : FallbackExpression (CAST NULL) AS alias
     - Colonnes NAVIGATION sans source : CAST(NULL AS nvarchar(255)) AS alias
-    - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'a résolution.
+    - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'à résolution.
     - ProjectData : nom de vue = EntityName_FR si PwaLanguage=FR (ex. Projets), EntityName_EN sinon (ex. Projects).
                    Aliases colonnes = Column_FR si PwaLanguage=FR, Column_EN sinon.
     - tbx_fr     : nom de vue = vw_EntityName_FR (ex. vw_Projets), aliases Column_FR (toujours FR).
@@ -58,12 +58,12 @@ END;
 GO
 
 /* ===========================================================================================
-   LOT 2 : Generation des vues
+   LOT 2 : Génération des vues
    =========================================================================================== */
 DECLARE @RunId         uniqueidentifier = newid();
 DECLARE @ScriptName    sysname          = N'v6_07a_Generate_Views_From_Publication.sql';
 DECLARE @PwaLanguage   nvarchar(10);
-DECLARE @TargetSchémas nvarchar(200);
+DECLARE @TargetSchemas nvarchar(200);
 
 /* Schémas cibles à générer: ProjectData (alias langue cible), tbx (EN), tbx_fr (FR) */
 /* Modifiable ici si besoin de restreindre la génération */
@@ -101,7 +101,7 @@ IF @PwaLanguage IS NULL
     FROM cfg.Settings WHERE SettingKey = N'PwaLanguage';
 SET @PwaLanguage = ISNULL(@PwaLanguage, N'FR');
 
-SET @Msg = CONCAT(N'Generation vues depuis dic.EntityColumnPublication. PwaLanguage=', @PwaLanguage);
+SET @Msg = CONCAT(N'Génération des vues depuis dic.EntityColumnPublication. PwaLanguage=', @PwaLanguage);
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'START', @Severity=N'INFO', @Status=N'STARTED',
@@ -131,7 +131,7 @@ INTO @EntityName_EN, @EntityName_FR, @PsseSchema, @PsseObject, @SmartBoxSchema, 
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    /* Verifier qu'il y a au moins une colonne publiable pour cette entité */
+    /* Vérifier qu'il y a au moins une colonne publiable pour cette entité */
     IF NOT EXISTS (
         SELECT 1 FROM dic.EntityColumnPublication
         WHERE EntityName_EN = @EntityName_EN
@@ -208,7 +208,7 @@ BEGIN
       AND ecp.IsPublished = 1;
 
     /* ---------------------------------------------------------------------------------
-       Generer ProjectData.<EntityName_FR ou EN selon PwaLanguage> avec alias selon PwaLanguage
+       Générer ProjectData.<EntityName_FR ou EN selon PwaLanguage> avec alias selon PwaLanguage
        Le nom de vue suit la langue du tenant : si FR -> EntityName_FR (ex. Projets),
        si EN -> EntityName_EN (ex. Projects).
        --------------------------------------------------------------------------------- */
@@ -249,7 +249,7 @@ FROM ', @FromClause,
             INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
             VALUES (@RunId, @ViewSchema, @ViewName, N'ERROR',
                     CONCAT(N'Erreur ', @ErrNum, N': ', @ErrMsg));
-            SET @Msg = CONCAT(N'Echec vue ', @ViewSchema, N'.', @ViewName, N': ', @ErrMsg);
+            SET @Msg = CONCAT(N'Échec de la vue ', @ViewSchema, N'.', @ViewName, N': ', @ErrMsg);
             EXEC log.usp_WriteScriptLog
                 @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
                 @Phase=N'VIEW_ERROR', @Severity=N'WARN', @Status=N'WARNING',
@@ -259,7 +259,7 @@ FROM ', @FromClause,
     END;
 
     /* ---------------------------------------------------------------------------------
-       Generer tbx.<EntityName_EN> avec alias EN (couche interne anglaise)
+       Générer tbx.<EntityName_EN> avec alias EN (couche interne anglaise)
        --------------------------------------------------------------------------------- */
     IF @GenTbx = 1 AND @ColListEN IS NOT NULL
     BEGIN
@@ -296,7 +296,7 @@ FROM ', @FromClause,
     END;
 
     /* ---------------------------------------------------------------------------------
-       Generer tbx_fr.<EntityName_FR ou EntityName_EN> avec alias FR
+       Générer tbx_fr.<EntityName_FR ou EntityName_EN> avec alias FR
        --------------------------------------------------------------------------------- */
     IF @GenTbxFr = 1 AND @ColListFR IS NOT NULL
     BEGIN
@@ -343,7 +343,7 @@ DEALLOCATE entity_cursor;
    Rapport final
    =========================================================================================== */
 SET @Msg = CONCAT(
-    N'Generation vues terminée. ',
+    N'Génération des vues terminée. ',
     N'Créées=', @ViewCreated,
     N'; Echouees=', @ViewFailed,
     N'; Ignorees=', @ViewSkipped,

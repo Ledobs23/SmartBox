@@ -2,10 +2,10 @@
     v6_01a_Prereq_Diagnostic.sql
     Projet      : SmartBox
     Phase       : 01a - Diagnostic V6 pour base existante
-    Role        : Verifier les prérequis applicatifs sans exiger CREATE DATABASE, xp_cmdshell ou accès fichiers.
+    Role        : Vérifier les prérequis applicatifs sans exiger CREATE DATABASE, xp_cmdshell ou accès fichiers.
 
     Notes V6
-    - La base SmartBox est supposee déjà créée par le client.
+    - La base SmartBox est supposée déjà créée par le client.
     - xp_cmdshell est diagnostique mais non requis.
     - BULK INSERT est diagnostique seulement pour le chargement DBA optionnel du jour 1.
 =====================================================================================================================*/
@@ -14,7 +14,7 @@ GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 61001, N'Exécuter ce diagnostic dans la base SmartBox cible existante, pas dans une base systeme.', 1;
+    THROW 61001, N'Exécuter ce diagnostic dans la base SmartBox cible existante, pas dans une base système.', 1;
 END;
 
 DECLARE @MinCompatibilityLevel int = 140;

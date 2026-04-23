@@ -17,7 +17,7 @@
       MAPPED_NEEDS_JOIN = PsseColumnName connu mais source secondaire sans jointure définie -> IsPublished=0
       UNMAPPED         = Aucune colonne PSSE correspondante -> FallbackExpression CAST(NULL AS type)
       NAVIGATION       = Colonne non-PRIMITIVE (lien navigationnel OData) -> expression non auto-résolue
-    - Langue ciblee par cfg.PWA.Language (FR ou EN) : les deux alias (Column_FR, Column_EN) sont stockes.
+    - Langue ciblée par cfg.PWA.Language (FR ou EN) : les deux alias (Column_FR, Column_EN) sont stockés.
     - Journalisation dans log.ScriptExecutionLog et stg.EntityDraftBuildLog.
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -229,8 +229,8 @@ EXEC log.usp_WriteScriptLog
 
 /* ===========================================================================================
    ETAPE A : dic.EntityBinding
-   Source primaire PSSE par entité. Utilise la derniere entree par entité de stg.EntitySource_Draft
-   (la plus recente par ProposedAt, puis la mieux couverte).
+   Source primaire PSSE par entité. Utilise la dernière entrée par entité de stg.EntitySource_Draft
+   (la plus récente par ProposedAt, puis la mieux couverte).
    Protection : BindingStatus = MANUAL n'est pas ecrase.
    =========================================================================================== */
 MERGE dic.EntityBinding AS T
@@ -313,7 +313,7 @@ SELECT
     CASE
         WHEN key_col.ColumnName IS NOT NULL
             THEN CONCAT(N'j', sec.JoinIdx, N'.', QUOTENAME(key_col.ColumnName), N' = src.', QUOTENAME(key_col.ColumnName))
-        ELSE N'/* TODO: specifier la condition de jointure */'
+        ELSE N'/* TODO: spécifier la condition de jointure */'
     END                                                        AS JoinExpression,
     sec.ColCount                                               AS ColumnCoverage,
     CASE WHEN key_col.ColumnName IS NOT NULL THEN N'PROPOSED' ELSE N'MANUAL_REQUIRED' END AS JoinStatus,

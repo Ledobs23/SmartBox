@@ -14,13 +14,13 @@
 
     Notes V6
     - Le chargement des CSV du dictionnaire est fait par Load-DictionaryCSV.ps1 (SqlBulkCopy -> stg.import_dictionary_*).
-    - Le schema `load` est obsolète et n'est pas créé.
+    - Le schéma `load` est obsolète et n'est pas créé.
     - Lit cfg.Settings et cfg.PwaSchemaScope pour inventorier la BD content PSSE et créer les synonymes.
 
     Structure en 4 lots GO:
       Lot 1 : prérequis et schémas.
       Lot 2 : création des tables si absentes (DDL pur, rejouable).
-      Lot 3 : migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot séparé requis).
+      Lot 3 : migration — ajouter SourceDatabaseName à cfg.PwaObjectScope (lot séparé requis).
       Lot 4 : inventaire PSSE, mise à jour cfg.PwaObjectScope, synonymes src_*, rapport.
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -268,7 +268,7 @@ BEGIN
 END;
 GO
 
-/* ===== LOT 3 : Migration — ajouter SourceDatabaseName a cfg.PwaObjectScope (lot séparé requis) ===== */
+/* ===== LOT 3 : Migration — ajouter SourceDatabaseName à cfg.PwaObjectScope (lot séparé requis) ===== */
 /* Correctif 2: idempotent pour les installations existantes sans cette colonne. */
 IF COL_LENGTH(N'cfg.PwaObjectScope', N'SourceDatabaseName') IS NULL
     ALTER TABLE cfg.PwaObjectScope ADD SourceDatabaseName sysname NULL;
@@ -325,7 +325,7 @@ IF @ContentDbName IS NULL
     THROW 63004, N'cfg.Settings.ContentDbName est requis avant v6_03a.', 1;
 
 IF DB_ID(@ContentDbName) IS NULL
-    THROW 63005, N'La base source declaree dans cfg.Settings.ContentDbName est introuvable.', 1;
+    THROW 63005, N'La base source déclarée dans cfg.Settings.ContentDbName est introuvable.', 1;
 
 IF @ProjectSchemasCsv IS NULL
     THROW 63006, N'cfg.PwaSchemaScope ou cfg.Settings.ProjectSchemasCsv est requis avant v6_03a.', 1;

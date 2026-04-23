@@ -1,7 +1,7 @@
 /*=====================================================================================================================
     v6_00z_Reset_SmartBox_V6_Working_Tables.sql
     Projet      : SmartBox
-    Phase       : 00z - Remise a zero avant de rejouer le pipeline
+    Phase       : 00z - Remise à zéro avant de rejouer le pipeline
 
     Comportement par défaut
     -------------------------------------------------------
@@ -14,11 +14,11 @@
     Synonymes src_*                                  : toujours supprimés.
     log.ScriptExecutionLog et toutes les autres tables : supprimées.
 
-    Schémas touches par le nettoyage
+    Schémas touchés par le nettoyage
     -------------------------------------------------------
     stg | dic | load | review | report | log | cfg (hors PWA et Settings)
 
-    Pour vider aussi cfg.PWA et cfg.Settings (reinstallation complete)
+    Pour vider aussi cfg.PWA et cfg.Settings (réinstallation complète)
     -------------------------------------------------------
     Mettre @ClearSettings = 1  ET  @AllowClearProtectedConfig = 1.
     Ne jamais activer ces flags sans être certain de vouloir ressaisir
@@ -33,13 +33,13 @@ IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 GO
 
 /*=====================================================================================================================
-    PARAMETRES DBA
+    PARAMÈTRES DBA
 =====================================================================================================================*/
 DECLARE @ExpectedDatabaseName      sysname = N'SPR';
 
 /* --- Zones protégées (double confirmation requise) --- */
 DECLARE @ClearSettings             bit = 0;   -- 1 = supprime aussi cfg.Settings et cfg.PWA
-DECLARE @AllowClearProtectedConfig bit = 0;   -- Mettre a 1 pour confirmer @ClearSettings
+DECLARE @AllowClearProtectedConfig bit = 0;   -- Mettre à 1 pour confirmer @ClearSettings
 
 /* =====================================================================================================================
    NE PAS MODIFIER EN DESSOUS DE CETTE LIGNE
@@ -48,7 +48,7 @@ DECLARE @Sql  nvarchar(max);
 DECLARE @Cnt  int;
 
 IF DB_NAME() <> @ExpectedDatabaseName
-    THROW 60002, N'La base courante ne correspond pas a @ExpectedDatabaseName. Modifier le paramètre.', 1;
+    THROW 60002, N'La base courante ne correspond pas à @ExpectedDatabaseName. Modifier le paramètre.', 1;
 
 IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 0
     THROW 60003, N'ClearSettings demande. Mettre @AllowClearProtectedConfig = 1 pour confirmer.', 1;
@@ -104,11 +104,11 @@ SET @Sql = NULL;
    3. Toutes les tables de travail
    Schémas : stg | dic | load | review | report | log
              cfg  (toutes sauf cfg.PWA et cfg.Settings)
-   Approche dynamique : interroge sys.tables -> aucune liste a maintenir.
+   Approche dynamique : interroge sys.tables -> aucune liste à maintenir.
    Ordre : les tables avec FK enfants en premier (cfg.PwaSchemaScope avant cfg.PWA).
    =========================================================================================== */
 
-/* 3a. Tables avec FK potentielles vers cfg.PWA — a supprimer en premier */
+/* 3a. Tables avec FK potentielles vers cfg.PWA — à supprimer en premier */
 SELECT @Sql = STRING_AGG(
     CONVERT(nvarchar(max),
         N'DROP TABLE IF EXISTS ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N';'),
@@ -149,7 +149,7 @@ IF @ClearSettings = 1 AND @AllowClearProtectedConfig = 1
 BEGIN
     IF OBJECT_ID(N'cfg.PWA',      N'U') IS NOT NULL DROP TABLE cfg.PWA;
     IF OBJECT_ID(N'cfg.Settings', N'U') IS NOT NULL DROP TABLE cfg.Settings;
-    PRINT N'[4] cfg.Settings et cfg.PWA supprimés (reinstallation complete).';
+    PRINT N'[4] cfg.Settings et cfg.PWA supprimés (réinstallation complète).';
 END
 ELSE
     PRINT N'[4] cfg.Settings et cfg.PWA préservés.';

@@ -2,7 +2,7 @@
     v6_04a_Create_Native_ProjectData_Views.sql
     Projet      : SmartBox
     Phase       : 04a - Vues ProjectData natives
-    Role        : Créer les vues OData-like ProjectOnline depuis un snapshot fige dans la trousse V6.
+    Role        : Créer les vues OData-like ProjectOnline depuis un snapshot figé dans la trousse V6.
 
     Notes V6
     - Ne depend plus de SP_SPR_POC_Contenu au runtime.
@@ -99,7 +99,7 @@ EXEC log.usp_WriteScriptLog
     @Phase = N'START',
     @Severity = N'INFO',
     @Status = N'STARTED',
-    @Message = N'Début création des vues natives depuis le snapshot fige V6.';
+    @Message = N'Début création des vues natives depuis le snapshot figé V6.';
 
 SELECT @DropSql = STRING_AGG
 (
@@ -4329,7 +4329,7 @@ BEGIN
 END;
 
 IF @ProjectDataCustomColumnCount > 0
-    THROW 66007, N'Des champs personnalisés PSSE sont encore exposes dans ProjectData.', 1;
+    THROW 66007, N'Des champs personnalisés PSSE sont encore exposés dans ProjectData.', 1;
 
 SELECT
     @ViewDefinitionMode AS ViewDefinitionMode,

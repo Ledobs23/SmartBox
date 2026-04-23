@@ -1,7 +1,7 @@
 /*
-    Diagnostic v6_07a — Affiche le SQL génère pour chaque entité en erreur.
+    Diagnostic v6_07a — Affiche le SQL généré pour chaque entité en erreur.
     Exécuter dans VS Code connecté à SPR.
-    Le SQL génère apparait dans l'onglet Messages (PRINT).
+    Le SQL généré apparait dans l'onglet Messages (PRINT).
     Tenter aussi une exécution reelle et capturer l'erreur exacte.
 */
 SET NOCOUNT ON;

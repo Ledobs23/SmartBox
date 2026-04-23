@@ -1,5 +1,5 @@
 /*
-    Diagnostic v6_07a — Sauvegarde le SQL génère pour les 6 entités en erreur.
+    Diagnostic v6_07a — Sauvegarde le SQL généré pour les 6 entités en erreur.
     Retourne 3 result sets :
       1. Bindings + JoinExpressions
       2. Colonnes suspectes (QUOTENAME NULL, SourceExpression avec '=', alias long)
@@ -61,7 +61,7 @@ WHERE EntityName_EN IN (
   )
 ORDER BY EntityName_EN, ColumnPosition;
 
-/* ===== 3. SQL génère par entité ===== */
+/* ===== 3. SQL généré par entité ===== */
 SELECT
     eb.EntityName_EN,
     ISNULL(

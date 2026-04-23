@@ -39,7 +39,7 @@ $connStr = "Server=$Server;Database=$Database;Integrated Security=SSPI;TrustServ
 $conn    = New-Object System.Data.SqlClient.SqlConnection($connStr)
 try { $conn.Open() }
 catch {
-    Write-Error "Impossible de se connecter a $Server.$Database : $_"
+    Write-Error "Impossible de se connecter à $Server.$Database : $_"
     exit 1
 }
 Write-Host "Connecté à $Server / $Database" -ForegroundColor Cyan
@@ -87,11 +87,11 @@ $sqlCols = @{
 }
 
 # ---------------------------------------------------------------------------
-# Fonction : resout le nom de colonne CSV qui correspond a une colonne SQL.
+# Fonction : résout le nom de colonne CSV qui correspond à une colonne SQL.
 # Essaie dans l'ordre :
 #   1. Nom exact
-#   2. Nom insensible a la casse
-#   3. Nom SQL sans suffixe "Raw" (insensible a la casse)
+#   2. Nom insensible à la casse
+#   3. Nom SQL sans suffixe "Raw" (insensible à la casse)
 # ---------------------------------------------------------------------------
 function Resolve-CsvHeader {
     param([string[]]$CsvHeaders, [string]$SqlColumn)

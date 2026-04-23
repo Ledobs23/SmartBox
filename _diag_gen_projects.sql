@@ -1,4 +1,4 @@
-/* Genere le SQL de la vue Projects en un seul SELECT — aucun DECLARE */
+/* Génère le SQL de la vue Projects en un seul SELECT — aucun DECLARE */
 SELECT
     N'CREATE OR ALTER VIEW [ProjectData].[Projects] AS' + CHAR(10)
     + N'SELECT' + CHAR(10)

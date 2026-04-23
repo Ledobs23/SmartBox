@@ -6,8 +6,8 @@
                   de mapping OData <-> PSSE depuis stg.import_dictionary_*.
 
     Notes V6
-    - Aucune dépendance a xp_cmdshell.
-    - Chargement CSV possible via BULK INSERT (si DictionarySourcePath configuré) ou pre-chargement externe.
+    - Aucune dépendance à xp_cmdshell.
+    - Chargement CSV possible via BULK INSERT (si DictionarySourcePath configuré) ou pré-chargement externe.
     - Pipeline idempotent : rejouable sans perte de données.
     - Logs dans log.ScriptExecutionLog. Pas de stg.RunLog.
     - Langue pilotée par cfg.PWA.Language (FR ou EN).
@@ -16,16 +16,16 @@
     Prérequis
     - v6_02a exécuté (cfg.Settings, log.ScriptExecutionLog)
     - v6_03a exécuté (stg.ObjectInventory, stg.ColumnInventory, synonymes src_*)
-    - stg.import_dictionary_od_fields          peuple (voir note chargement ci-bas)
-    - stg.import_dictionary_lookup_entries     peuple
-    - stg.import_dictionary_projectdata_alias  peuple
+    - stg.import_dictionary_od_fields          peuplé (voir note chargement ci-dessous)
+    - stg.import_dictionary_lookup_entries     peuplé
+    - stg.import_dictionary_projectdata_alias  peuplé
 
     Chargement des CSV (jour 1)
-    Si AllowFileSystemAccèss = 0 (valeur par défaut MTMD) :
+    Si AllowFileSystemAccess = 0 (valeur par défaut MTMD) :
       - Utiliser SqlBulkCopy depuis PowerShell, SSIS ou outil externe
       - Les colonnes cibles sont définies dans stg.import_dictionary_*
       - Une fois les tables peuplées, rejouer ce script
-    Si AllowFileSystemAccèss = 1 et DictionarySourcePath configuré :
+    Si AllowFileSystemAccess = 1 et DictionarySourcePath configuré :
       - Ce script tentera BULK INSERT automatiquement (voir Phase B)
 
     PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA
@@ -55,7 +55,7 @@ IF OBJECT_ID(N'stg.import_dictionary_od_fields', N'U') IS NULL
    PHASE A : CREATION DES TABLES SI ABSENTES
    =========================================================================================== */
 
-/* cfg.dictionary_od_fields - Contrat OData (champs, types, nullabilite) */
+/* cfg.dictionary_od_fields - Contrat OData (champs, types, nullabilité) */
 IF OBJECT_ID(N'cfg.dictionary_od_fields', N'U') IS NULL
 BEGIN
     CREATE TABLE cfg.dictionary_od_fields
@@ -289,7 +289,7 @@ DECLARE @RunId                  uniqueidentifier = newid();
 DECLARE @ScriptName             sysname          = N'v6_05a_Load_Dictionary_From_LoadTables.sql';
 DECLARE @ContentDbName          sysname;
 DECLARE @PwaId                  int;
-DECLARE @AllowFileSystemAccèss  bit;
+DECLARE @AllowFileSystemAccess  bit;
 DECLARE @AllowCsvDay1Import     nvarchar(20);
 DECLARE @DictionarySourcePath   nvarchar(500);
 DECLARE @DictionaryFile_PD      nvarchar(260);
@@ -308,8 +308,8 @@ FROM cfg.Settings WHERE SettingKey = N'ContentDbName';
 SELECT @PwaId = TRY_CONVERT(int, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
 FROM cfg.Settings WHERE SettingKey = N'PwaId';
 
-SELECT @AllowFileSystemAccèss = TRY_CONVERT(bit, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
-FROM cfg.Settings WHERE SettingKey = N'AllowFileSystemAccèss';
+SELECT @AllowFileSystemAccess = TRY_CONVERT(bit, NULLIF(LTRIM(RTRIM(SettingValue)), N''))
+FROM cfg.Settings WHERE SettingKey = N'AllowFileSystemAccess';
 
 SELECT @AllowCsvDay1Import = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
 FROM cfg.Settings WHERE SettingKey = N'AllowCsvDay1Import';
@@ -339,7 +339,7 @@ SELECT @OdFieldsCount = COUNT(*) FROM stg.import_dictionary_od_fields;
 SELECT @LookupCount   = COUNT(*) FROM stg.import_dictionary_lookup_entries;
 SELECT @AliasCount    = COUNT(*) FROM stg.import_dictionary_projectdata_alias;
 
-IF @AllowFileSystemAccèss = 1
+IF @AllowFileSystemAccess = 1
     AND @AllowCsvDay1Import IN (N'OPTIONAL', N'YES')
     AND @DictionarySourcePath IS NOT NULL
     AND (@OdFieldsCount = 0 OR @LookupCount = 0 OR @AliasCount = 0)
@@ -418,7 +418,7 @@ BEGIN
         N'Tables stg.import_dictionary_* partiellement vides. ',
         N'od_fields=', @OdFieldsCount, N'; lookups=', @LookupCount, N'; alias=', @AliasCount,
         N'. Pre-charger via SqlBulkCopy (PowerShell), SSIS ou outil externe avant de rejouer ce script. ',
-        N'Consult la procédure de chargement dans la documentation V6.');
+        N'Consulter la procédure de chargement dans la documentation V6.');
     EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
         @Phase=N'LOAD_CHECK',@Severity=N'WARN',@Status=N'WARNING',@Message=@Msg;
     PRINT @Msg;
@@ -983,7 +983,7 @@ SELECT
     N'PSSE_COL_MISSING',
     EntityName_EN,
     Column_EN,
-    CONCAT(N'Colonne OData [', EntityName_EN, N'].', Column_EN, N' non trouvee dans stg.ColumnInventory (', @ContentDbName, N').')
+    CONCAT(N'Colonne OData [', EntityName_EN, N'].', Column_EN, N' non trouvée dans stg.ColumnInventory (', @ContentDbName, N').')
 FROM stg.ODataPsseExactColumnMatch
 WHERE RunId = @RunId
   AND MatchType = N'NO_MATCH';

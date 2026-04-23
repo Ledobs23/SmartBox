@@ -24,9 +24,16 @@
     - ETAPE E2 : Match normalisé (champs custom sans espaces OData vs avec espaces PSSE)
     - ETAPE E3 : Correction jointures TypeName/TypeDescription (Resources j1, Assignments j3)
     - ETAPE E4 : Jointures dérivées complètes (Tasks/Assignments/Projects/Timesheet/TimeSet)
-                  Group A : prefix OData stripping (BusinessDrivers, Engagements, Prioritizations, etc.)
-                  Group B : TimesheetLines jTSLine/jTSLineAppr/jTSClass + renames src
-                  Group C : TimesheetLineActualDataSet jLastChanged
+                  Group A  : prefix OData stripping (BusinessDrivers, Engagements, Prioritizations, etc.)
+                  Group B  : TimesheetLines jTSLine/jTSLineAppr/jTSClass + renames src
+                  Group C  : TimesheetLineActualDataSet jLastChanged
+                  Phase G  : Timesheets jTP/jTST (ref externe) + colonnes EndDate/StartDate/Description/StatusDescription
+                  Phase H  : TimeSet FiscalPeriodStart/Year → jFP (existant)
+                  Phase I  : TimesheetClasses TimesheetClassId → src.ClassUID
+                  Phase J  : jProject/jTask pour AssignmentBaselines, TaskBaselines, TaskTimephased, Deliverables, Issues, Risks, ProjectBaselines
+                  Phase K  : jResource pour ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet, EngagementsTimephasedDataSet
+                  Phase L  : EngagementsTimephasedDataSet renommages OData/PSSE (src direct)
+                  Phase M  : Engagements EngagementModifiedDate → src.ModifiedDate
                   Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
                   Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
@@ -1300,8 +1307,301 @@ WHERE EntityName_EN = N'TimesheetLineActualDataSet'
   AND Column_EN     = N'LastChangedResourceName'
   AND MapStatus    <> N'MANUAL';
 
+/* --- E4 : Phase G – Timesheets : jointures depuis script de référence externe validé ---
+   src primaire = MSP_Timesheet (PeriodUID, TimesheetStatusID disponibles)
+   Référence : MSP_TimesheetLine_UserView ← MSP_TimesheetPeriod, MSP_TimesheetStatus
+*/
+MERGE dic.EntityJoin AS tgt
+USING (VALUES
+    (N'Timesheets', N'jTP',  N'pjrep', N'MSP_TimesheetPeriod',  N'src_pjrep', N'jTP',  N'LEFT',
+     N'jTP.PeriodUID = src.PeriodUID',                1, N'MANUAL'),
+    (N'Timesheets', N'jTST', N'pjrep', N'MSP_TimesheetStatus',  N'src_pjrep', N'jTST', N'LEFT',
+     N'jTST.TimesheetStatusID = src.TimesheetStatusID', 1, N'MANUAL')
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+/* Timesheets — Description = src.Comment (MSP_Timesheet.Comment) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'Comment',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[Comment]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Timesheets' AND Column_EN = N'Description' AND MapStatus <> N'MANUAL';
+
+/* Timesheets — EndDate + StartDate → jTP */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jTP',
+    SourceExpression = N'jTP.' + QUOTENAME(PsseColumnName),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Timesheets'
+  AND Column_EN IN (N'EndDate', N'StartDate')
+  AND MapStatus    <> N'MANUAL';
+
+/* Timesheets — StatusDescription = jTST.Description */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'Description',
+    SourceAlias      = N'jTST',
+    SourceExpression = N'jTST.[Description]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Timesheets' AND Column_EN = N'StatusDescription' AND MapStatus <> N'MANUAL';
+
+/* --- E4 : Phase H – TimeSet : FiscalPeriodStart/Year via jFP (jointure déjà existante) ---
+   jFP.FiscalPeriodUID = src.FiscalPeriodUID (MSP_TimeByDay a FiscalPeriodUID)
+*/
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jFP',
+    SourceExpression = N'jFP.' + QUOTENAME(PsseColumnName),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimeSet'
+  AND Column_EN IN (N'FiscalPeriodStart', N'FiscalPeriodYear')
+  AND MapStatus    <> N'MANUAL';
+
+/* --- E4 : Phase I – TimesheetClasses : TimesheetClassId → src.ClassUID ---
+   MSP_TimesheetClass_UserView expose ClassUID (pas TimesheetClassUID)
+*/
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'ClassUID',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[ClassUID]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetClasses' AND Column_EN = N'TimesheetClassId' AND MapStatus <> N'MANUAL';
+
+/* --- E4 : Phase J – jProject / jTask pour entités baseline/timephased ---
+   Entités avec ProjectUID direct → jProject.ProjectName
+   Entités avec TaskUID direct    → jTask.TaskName
+*/
+MERGE dic.EntityJoin AS tgt
+USING (VALUES
+    /* jProject — MSP_EpmProject_UserView */
+    (N'AssignmentBaselines',              N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'AssignmentBaselineTimephasedDataSet', N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'Deliverables',                     N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'Issues',                           N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'Risks',                            N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'ProjectBaselines',                 N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'TaskBaselines',                    N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'TaskBaselineTimephasedDataSet',    N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'TaskTimephasedDataSet',            N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    (N'EngagementsTimephasedDataSet',     N'jProject', N'pjrep', N'MSP_EpmProject_UserView',
+     N'src_pjrep', N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+    /* jTask — MSP_EpmTask_UserView */
+    (N'AssignmentBaselines',              N'jTask', N'pjrep', N'MSP_EpmTask_UserView',
+     N'src_pjrep', N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+    (N'AssignmentBaselineTimephasedDataSet', N'jTask', N'pjrep', N'MSP_EpmTask_UserView',
+     N'src_pjrep', N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+    (N'TaskBaselines',                    N'jTask', N'pjrep', N'MSP_EpmTask_UserView',
+     N'src_pjrep', N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+    (N'TaskBaselineTimephasedDataSet',    N'jTask', N'pjrep', N'MSP_EpmTask_UserView',
+     N'src_pjrep', N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+    (N'TaskTimephasedDataSet',            N'jTask', N'pjrep', N'MSP_EpmTask_UserView',
+     N'src_pjrep', N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL')
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+/* Phase J — ProjectName → jProject.ProjectName pour toutes les entités ci-dessus */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jProject',
+    SourceExpression = N'jProject.[ProjectName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'AssignmentBaselines', N'AssignmentBaselineTimephasedDataSet',
+                        N'Deliverables', N'Issues', N'Risks', N'ProjectBaselines',
+                        N'TaskBaselines', N'TaskBaselineTimephasedDataSet',
+                        N'TaskTimephasedDataSet', N'EngagementsTimephasedDataSet')
+  AND Column_EN    = N'ProjectName'
+  AND MapStatus   <> N'MANUAL';
+
+/* Phase J — TaskName → jTask.TaskName */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jTask',
+    SourceExpression = N'jTask.[TaskName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'AssignmentBaselines', N'AssignmentBaselineTimephasedDataSet',
+                        N'TaskBaselines', N'TaskBaselineTimephasedDataSet',
+                        N'TaskTimephasedDataSet')
+  AND Column_EN  = N'TaskName'
+  AND MapStatus <> N'MANUAL';
+
+/* --- E4 : Phase K – jResource pour ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet,
+                      EngagementsTimephasedDataSet
+*/
+MERGE dic.EntityJoin AS tgt
+USING (VALUES
+    (N'ResourceTimephasedDataSet',        N'jResource', N'pjrep', N'MSP_EpmResource_UserView',
+     N'src_pjrep', N'jResource', N'LEFT', N'jResource.ResourceUID = src.ResourceUID', 1, N'MANUAL'),
+    (N'ResourceDemandTimephasedDataSet',  N'jResource', N'pjrep', N'MSP_EpmResource_UserView',
+     N'src_pjrep', N'jResource', N'LEFT', N'jResource.ResourceUID = src.ResourceUID', 1, N'MANUAL'),
+    (N'EngagementsTimephasedDataSet',     N'jResource', N'pjrep', N'MSP_EpmResource_UserView',
+     N'src_pjrep', N'jResource', N'LEFT', N'jResource.ResourceUID = src.ResourceUID', 1, N'MANUAL')
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+/* Phase K — ResourceName → jResource.ResourceName */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jResource',
+    SourceExpression = N'jResource.[ResourceName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'ResourceTimephasedDataSet', N'ResourceDemandTimephasedDataSet',
+                        N'EngagementsTimephasedDataSet')
+  AND Column_EN  = N'ResourceName'
+  AND MapStatus <> N'MANUAL';
+
+/* Phase K — ResourceDemandTimephasedDataSet : renommages src (colonnes nommées différemment dans PSSE) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'ProjectUtilizationDate',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[ProjectUtilizationDate]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'ResourceDemandTimephasedDataSet'
+  AND Column_EN     = N'ResourcePlanUtilizationDate'
+  AND MapStatus    <> N'MANUAL';
+
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'ProjectUtilizationSetting',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[ProjectUtilizationSetting]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'ResourceDemandTimephasedDataSet'
+  AND Column_EN     = N'ResourcePlanUtilizationType'
+  AND MapStatus    <> N'MANUAL';
+
+/* --- E4 : Phase L – EngagementsTimephasedDataSet : colonnes src directes (renommages OData/PSSE) ---
+   MSP_EpmEngagementByDay_UserView : CommittedUnits, ProposedUnits, EngagementDate (≠ noms OData)
+*/
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = CASE Column_EN
+        WHEN N'CommittedMaxUnits' THEN N'CommittedUnits'
+        WHEN N'EngagementId'      THEN N'EngagementUID'
+        WHEN N'EngagementName'    THEN N'EngagementName'
+        WHEN N'ProjectId'         THEN N'ProjectUID'
+        WHEN N'ProposedMaxUnits'  THEN N'ProposedUnits'
+        WHEN N'ProposedWork'      THEN N'ProposedWork'
+        WHEN N'CommittedWork'     THEN N'CommittedWork'
+        WHEN N'ResourceId'        THEN N'ResourceUID'
+        WHEN N'TimeByDay'         THEN N'EngagementDate'
+    END,
+    SourceAlias      = N'src',
+    SourceExpression = N'src.' + QUOTENAME(CASE Column_EN
+        WHEN N'CommittedMaxUnits' THEN N'CommittedUnits'
+        WHEN N'EngagementId'      THEN N'EngagementUID'
+        WHEN N'EngagementName'    THEN N'EngagementName'
+        WHEN N'ProjectId'         THEN N'ProjectUID'
+        WHEN N'ProposedMaxUnits'  THEN N'ProposedUnits'
+        WHEN N'ProposedWork'      THEN N'ProposedWork'
+        WHEN N'CommittedWork'     THEN N'CommittedWork'
+        WHEN N'ResourceId'        THEN N'ResourceUID'
+        WHEN N'TimeByDay'         THEN N'EngagementDate'
+    END),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'EngagementsTimephasedDataSet'
+  AND Column_EN IN (N'CommittedMaxUnits', N'EngagementId', N'EngagementName',
+                   N'ProjectId', N'ProposedMaxUnits', N'ProposedWork',
+                   N'CommittedWork', N'ResourceId', N'TimeByDay')
+  AND MapStatus    <> N'MANUAL';
+
+/* --- E4 : Phase M – Engagements : EngagementModifiedDate → src.ModifiedDate ---
+   MSP_EpmEngagements_UserView expose ModifiedDate (préfixe OData "Engagement" strippé)
+*/
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'ModifiedDate',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[ModifiedDate]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Engagements'
+  AND Column_EN     = N'EngagementModifiedDate'
+  AND MapStatus    <> N'MANUAL';
+
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C résolus : prefix OData stripping, TimesheetLines (jTSLine/jTSLineAppr/jTSClass), TimesheetLineActualDataSet (jLastChanged), TimeSet (jFP).';
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M résolus.';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',

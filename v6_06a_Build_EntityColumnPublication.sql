@@ -23,7 +23,10 @@
     Étapes post-publication (après MERGE dic.EntityColumnPublication)
     - ETAPE E2 : Match normalisé (champs custom sans espaces OData vs avec espaces PSSE)
     - ETAPE E3 : Correction jointures TypeName/TypeDescription (Resources j1, Assignments j3)
-    - ETAPE E4 : Jointures dérivées ProjectName/TaskName/ParentTaskName (Tasks, Assignments, ATD)
+    - ETAPE E4 : Jointures dérivées ProjectName/TaskName/ParentTaskName/ResourceName (Tasks, Assignments, ATD)
+                  Assignments jAssignApplied (AllUpdatesApplied/UpdatesAppliedDate)
+                  Projects jPTRI/jWFI/jWFOwner (ProjectTimephased, WorkflowCreatedDate/OwnerId/OwnerName)
+                  Projects cas spéciaux : EnterpriseProjectTypeIsDefault, ProjectWorkspaceInternalUrl
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
 =====================================================================================================================*/
 SET NOCOUNT ON;
@@ -865,12 +868,12 @@ EXEC log.usp_WriteScriptLog
     @Message=@Msg, @RowsAffected=4;
 
 /* ===========================================================================================
-   ETAPE E4 : Jointures dérivées — ProjectName, TaskName, ParentTaskName
+   ETAPE E4 : Jointures dérivées — ProjectName, TaskName, ParentTaskName, ResourceName,
+              Workflow + Timephased Projects, AssignmentAllUpdatesApplied
    Ces colonnes existent dans l'endpoint OData mais nécessitent des jointures supplémentaires
-   non auto-détectées : jointure vers MSP_EpmProject_UserView (ProjectName), vers
-   MSP_EpmTask_UserView (TaskName), et auto-jointure sur la tâche parente (ParentTaskName).
-   Pour AssignmentTimephasedDataSet, les jointures passent par j1 (MSP_EpmAssignment_UserView).
-   MERGE idempotent — JoinStatus MANUAL protège des futures exécutions de v6_06a.
+   non auto-détectées. MERGE idempotent — JoinStatus MANUAL protège des futures exécutions.
+   Jointures imbriquées (jWFOwner dépend de jWFI) : valides car STRING_AGG de v6_07a ordonne
+   par JoinTag alphabétique — jWFI est émis avant jWFOwner dans la clause FROM.
    =========================================================================================== */
 MERGE dic.EntityJoin AS T
 USING
@@ -888,12 +891,27 @@ USING
         /* Assignments : TaskName */
         (N'Assignments', N'jTask', N'pjrep', N'MSP_EpmTask_UserView', N'src_pjrep',
          N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+        /* Assignments : ResourceName (ResourceUID direct dans MSP_EpmAssignment_UserView) */
+        (N'Assignments', N'jResource', N'pjrep', N'MSP_EpmResource_UserView', N'src_pjrep',
+         N'jResource', N'LEFT', N'jResource.ResourceUID = src.ResourceUID', 1, N'MANUAL'),
+        /* Assignments : AssignmentAllUpdatesApplied / AssignmentUpdatesAppliedDate (j4=TODO) */
+        (N'Assignments', N'jAssignApplied', N'pjrep', N'MSP_EpmAssignmentsApplied_UserView', N'src_pjrep',
+         N'jAssignApplied', N'LEFT', N'jAssignApplied.AssignmentUID = src.AssignmentUID', 1, N'MANUAL'),
         /* AssignmentTimephasedDataSet : ProjectName via j1.ProjectUID (j1 = MSP_EpmAssignment_UserView) */
         (N'AssignmentTimephasedDataSet', N'jProject', N'pjrep', N'MSP_EpmProject_UserView', N'src_pjrep',
          N'jProject', N'LEFT', N'jProject.ProjectUID = j1.ProjectUID', 1, N'MANUAL'),
         /* AssignmentTimephasedDataSet : TaskName via j1.TaskUID */
         (N'AssignmentTimephasedDataSet', N'jTask', N'pjrep', N'MSP_EpmTask_UserView', N'src_pjrep',
-         N'jTask', N'LEFT', N'jTask.TaskUID = j1.TaskUID', 1, N'MANUAL')
+         N'jTask', N'LEFT', N'jTask.TaskUID = j1.TaskUID', 1, N'MANUAL'),
+        /* Projects : ProjectTimephased (PSSE colonne = TimePhased, clé = ProjectId != ProjectUID) */
+        (N'Projects', N'jPTRI', N'pjrep', N'MSP_ProjectTimephasedRollupInfo_ODATAView', N'src_pjrep',
+         N'jPTRI', N'LEFT', N'jPTRI.ProjectId = src.ProjectUID', 1, N'MANUAL'),
+        /* Projects : WorkflowCreatedDate, WorkflowOwnerId (clé = ProjectId != ProjectUID) */
+        (N'Projects', N'jWFI', N'pjrep', N'MSP_EpmWorkflowInstance_UserView', N'src_pjrep',
+         N'jWFI', N'LEFT', N'jWFI.ProjectId = src.ProjectUID', 1, N'MANUAL'),
+        /* Projects : WorkflowOwnerName — jointure imbriquée sur jWFI.WorkflowOwner (ResourceUID) */
+        (N'Projects', N'jWFOwner', N'pjrep', N'MSP_EpmResource_UserView', N'src_pjrep',
+         N'jWFOwner', N'LEFT', N'jWFOwner.ResourceUID = jWFI.WorkflowOwner', 1, N'MANUAL')
 ) AS S (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
         JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
 ON  T.EntityName_EN = S.EntityName_EN
@@ -957,11 +975,138 @@ WHERE EntityName_EN = N'Tasks'
   AND Column_EN     = N'ParentTaskName'
   AND MapStatus    <> N'MANUAL';
 
-SET @Msg = N'ETAPE E4 : jointures jProject/jTask/jParent insérées. ProjectName, TaskName, ParentTaskName activés (Tasks, Assignments, AssignmentTimephasedDataSet).';
+/* Assignments : ResourceName via jResource */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmResource_UserView',
+    PsseColumnName   = N'ResourceName',
+    SourceAlias      = N'jResource',
+    SourceExpression = N'jResource.[ResourceName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Assignments'
+  AND Column_EN     = N'ResourceName'
+  AND MapStatus    <> N'MANUAL';
+
+/* Assignments : AllUpdatesApplied + UpdatesAppliedDate via jAssignApplied */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmAssignmentsApplied_UserView',
+    PsseColumnName   = ecp.Column_EN,
+    SourceAlias      = N'jAssignApplied',
+    SourceExpression = N'jAssignApplied.' + QUOTENAME(ecp.Column_EN),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+WHERE ecp.EntityName_EN = N'Assignments'
+  AND ecp.Column_EN IN (N'AssignmentAllUpdatesApplied', N'AssignmentUpdatesAppliedDate')
+  AND ecp.MapStatus    <> N'MANUAL';
+
+/* Projects : ProjectTimephased (PSSE : TimePhased dans MSP_ProjectTimephasedRollupInfo_ODATAView) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_ProjectTimephasedRollupInfo_ODATAView',
+    PsseColumnName   = N'TimePhased',
+    SourceAlias      = N'jPTRI',
+    SourceExpression = N'jPTRI.[TimePhased]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Projects'
+  AND Column_EN     = N'ProjectTimephased'
+  AND MapStatus    <> N'MANUAL';
+
+/* Projects : WorkflowCreatedDate (PSSE : WorkflowCreated) + WorkflowOwnerId (PSSE : WorkflowOwner) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmWorkflowInstance_UserView',
+    PsseColumnName   = CASE ecp.Column_EN
+                           WHEN N'WorkflowCreatedDate' THEN N'WorkflowCreated'
+                           WHEN N'WorkflowOwnerId'     THEN N'WorkflowOwner'
+                       END,
+    SourceAlias      = N'jWFI',
+    SourceExpression = CASE ecp.Column_EN
+                           WHEN N'WorkflowCreatedDate' THEN N'jWFI.[WorkflowCreated]'
+                           WHEN N'WorkflowOwnerId'     THEN N'jWFI.[WorkflowOwner]'
+                       END,
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+WHERE ecp.EntityName_EN = N'Projects'
+  AND ecp.Column_EN IN (N'WorkflowCreatedDate', N'WorkflowOwnerId')
+  AND ecp.MapStatus    <> N'MANUAL';
+
+/* Projects : WorkflowOwnerName (PSSE : ResourceName dans jWFOwner — jointure imbriquée) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmResource_UserView',
+    PsseColumnName   = N'ResourceName',
+    SourceAlias      = N'jWFOwner',
+    SourceExpression = N'jWFOwner.[ResourceName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Projects'
+  AND Column_EN     = N'WorkflowOwnerName'
+  AND MapStatus    <> N'MANUAL';
+
+/* Projects : EnterpriseProjectTypeIsDefault (PSSE : IsDefault dans le join EPT auto-détecté) */
+UPDATE ecp
+SET ecp.PsseColumnName   = N'IsDefault',
+    ecp.SourceAlias      = ej.JoinAlias,
+    ecp.SourceExpression = QUOTENAME(ej.JoinAlias) + N'.[IsDefault]',
+    ecp.MapStatus        = N'MAPPED',
+    ecp.IsPublished      = 1,
+    ecp.PublishedOn      = sysdatetime(),
+    ecp.UpdatedOn        = sysdatetime(),
+    ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN dic.EntityJoin ej
+    ON  ej.EntityName_EN = N'Projects'
+    AND ej.PsseObjectName = N'MSP_EpmEnterpriseProjectType'
+    AND ej.IsActive = 1
+WHERE ecp.EntityName_EN = N'Projects'
+  AND ecp.Column_EN     = N'EnterpriseProjectTypeIsDefault'
+  AND ecp.MapStatus    <> N'MANUAL';
+
+/* Projects : ProjectWorkspaceInternalUrl (PSSE : ProjectWorkspaceInternalHRef dans src primaire) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmProject_UserView',
+    PsseColumnName   = N'ProjectWorkspaceInternalHRef',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[ProjectWorkspaceInternalHRef]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Projects'
+  AND Column_EN     = N'ProjectWorkspaceInternalUrl'
+  AND MapStatus    <> N'MANUAL';
+
+DECLARE @E4Count int = @@ROWCOUNT;
+SET @Msg = CONCAT(N'ETAPE E4 : jointures dérivées insérées (jProject/jTask/jParent/jResource/jAssignApplied/jPTRI/jWFI/jWFOwner). ',
+    N'Colonnes activées : ProjectName, TaskName, ParentTaskName, ResourceName (Assignments), ',
+    N'AllUpdatesApplied, ProjectTimephased, WorkflowCreatedDate, WorkflowOwnerId, WorkflowOwnerName, ',
+    N'EnterpriseProjectTypeIsDefault, ProjectWorkspaceInternalUrl.');
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',
-    @Message=@Msg, @RowsAffected=@@ROWCOUNT;
+    @Message=@Msg, @RowsAffected=@E4Count;
 
 /* ===========================================================================================
    ETAPE E5 : Marquage des jointures SiteId croisées (SITEID_CROSS)

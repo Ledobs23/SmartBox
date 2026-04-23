@@ -3,26 +3,33 @@
     Projet      : SmartBox
     Phase       : 00z - Remise à zéro avant de rejouer le pipeline
 
+    Contexte
+    -------------------------------------------------------
+    S'il fallait reprendre la création suite à une mauvaise 
+    manipulation ou pour rejouter le pipeline complet.
+
     Comportement par défaut
     -------------------------------------------------------
     DROP TABLE de TOUTES les tables de la base, sauf cfg.PWA et cfg.Settings.
     Cela permet de rejouer le pipeline complet 02a -> 07a sur une base propre.
+
     cfg.PWA et cfg.Settings contiennent la configuration du tenant : ils sont
     TOUJOURS préservés afin que v6_02a puisse appliquer ses MERGE sans ressaisie.
 
-    Vues ProjectData / tbx / tbx_fr / tbx_master   : toujours supprimées.
-    Synonymes src_*                                  : toujours supprimés.
-    log.ScriptExecutionLog et toutes les autres tables : supprimées.
+    Vues ProjectData / tbx / tbx_fr / tbx_master        : toujours supprimées.
+    Synonymes src_*                                     : toujours supprimés.
+    log.ScriptExecutionLog et toutes les autres tables  : supprimées.
 
     Schémas touchés par le nettoyage
     -------------------------------------------------------
-    stg | dic | load | review | report | log | cfg (hors PWA et Settings)
+    stg | dic | review | report | log | cfg (hors PWA et Settings)
 
     Pour vider aussi cfg.PWA et cfg.Settings (réinstallation complète)
     -------------------------------------------------------
     Mettre @ClearSettings = 1  ET  @AllowClearProtectedConfig = 1.
+
     Ne jamais activer ces flags sans être certain de vouloir ressaisir
-    toute la configuration dans v6_02a.
+    TOUTE la configuration avec v6_02a.
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -33,7 +40,7 @@ IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 GO
 
 /*=====================================================================================================================
-    PARAMÈTRES DBA
+    PARAMÈTRES DBA - Nom de la BD à cibler
 =====================================================================================================================*/
 DECLARE @ExpectedDatabaseName      sysname = N'SPR';
 
@@ -102,8 +109,9 @@ SET @Sql = NULL;
 
 /* ===========================================================================================
    3. Toutes les tables de travail
-   Schémas : stg | dic | load | review | report | log
+   Schémas : stg | dic | review | report | log
              cfg  (toutes sauf cfg.PWA et cfg.Settings)
+
    Approche dynamique : interroge sys.tables -> aucune liste à maintenir.
    Ordre : les tables avec FK enfants en premier (cfg.PwaSchemaScope avant cfg.PWA).
    =========================================================================================== */

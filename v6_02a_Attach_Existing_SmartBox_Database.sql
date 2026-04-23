@@ -5,10 +5,10 @@
     Role        : Créer la configuration minimale V6 sans créer ni déplacer la base.
 
     Notes V6
-    - Remplace la portion applicative de v5_02a.
+    - Remplace la portion applicative de la version v5
     - Ne contient aucun CREATE DATABASE, ALTER DATABASE fichier, xp_cmdshell ou accès NTFS.
-    - Crée la table de log dans le schéma log.
-    - Paramètres déclaratifs dans le bloc PARAMETRES CLIENT (CTRL+F)     
+    - Crée la table de log dans le schéma log. Prépare le chemin pour l'implémentation de la journalisation.
+    - Paramètres déclaratifs dans le bloc PARAMETRES CLIENT (Faite CTRL+F pour trouver rapidement)     
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -16,7 +16,7 @@ GO
 
 IF DB_NAME() IN (N'master', N'model', N'msdb', N'tempdb')
 BEGIN
-    THROW 62001, N'Exécuter ce script dans la base SmartBox cible existante.', 1;
+    THROW 62001, N'Exécuter ce script dans la BD SmartBox ciblée et existante.', 1;
 END;
 GO
 
@@ -153,15 +153,16 @@ END;
 GO
 
 /*=====================================================================================================================
-    PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA
+    PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA ou le DBO
 
-    Pour adapter ce script à un autre client/environnement, modifier les valeurs ci-dessous seulement.
+    Pour adapter ce script à un autre pwa/palier/client/environnement, modifier les valeurs ci-dessous seulement.
     Le reste du script lit ces variables et alimente cfg.Settings, cfg.PWA et cfg.PwaSchemaScope.
+    NE TOUCHEZ PLUS À RIEN APRÈS AVOIR MODIFIÉ CES VARIABLES, SAUF SI VOUS SAVEZ EXACTEMENT CE QUE VOUS FAITES.
 
-    Valeurs MTMD confirmees pour ce déploiement:
-      - Base SmartBox cible        : SPR, soit la base dans laquelle ce script est exécuté.
-      - BD contenu PWA source      : SP_SPR_POC_Contenu.
-      - Compte de déploiement vise : MTQ\franbreton.
+    Valeurs MTMD confirmÉes pour ce déploiement:
+      - Base SmartBox cible             : SPR, soit la base CRÉÉE PAR Fouad dans laquelle ce script est exécuté.
+      - BD contenu PWA source           : SP_SPR_POC_Contenu.
+      - Compte de déploiement utilisé   : MTQ\franbreton.
 =====================================================================================================================*/
 DECLARE @ClientName nvarchar(128) = N'MTMD';                     -- Nom du client ou ministere.
 DECLARE @EnvironmentName nvarchar(30) = N'PROD';                 -- DEV, TEST, QA, PROD, etc.

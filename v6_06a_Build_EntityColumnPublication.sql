@@ -34,6 +34,7 @@
                   Phase K  : jResource pour ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet, EngagementsTimephasedDataSet
                   Phase L  : EngagementsTimephasedDataSet renommages OData/PSSE (src direct)
                   Phase M  : Engagements EngagementModifiedDate → src.ModifiedDate
+                  Phase N  : ResourceTimephasedDataSet/ResourceDemandTimephasedDataSet jTBD (MSP_TimeByDay → FiscalPeriodId) + ResourceModifiedDate via jResource
                   Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
                   Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
@@ -1600,8 +1601,60 @@ WHERE EntityName_EN = N'Engagements'
   AND Column_EN     = N'EngagementModifiedDate'
   AND MapStatus    <> N'MANUAL';
 
+/* --- E4 : Phase N – FiscalPeriodId via MSP_TimeByDay + ResourceModifiedDate via jResource ---
+   MSP_EpmResourceByDay et MSP_EpmResourceDemandByDay_UserView n'ont pas FiscalPeriodUID direct.
+   MSP_TimeByDay est la table calendrier PSSE : chaque jour a un FiscalPeriodUID.
+   ResourceModifiedDate est dans MSP_EpmResource_UserView → jResource déjà créé en Phase K.
+*/
+MERGE dic.EntityJoin AS tgt
+USING (VALUES
+    (N'ResourceTimephasedDataSet',       N'jTBD', N'pjrep', N'MSP_TimeByDay', N'src_pjrep',
+     N'jTBD', N'LEFT', N'jTBD.TimeByDay = src.TimeByDay', 1, N'MANUAL'),
+    (N'ResourceDemandTimephasedDataSet', N'jTBD', N'pjrep', N'MSP_TimeByDay', N'src_pjrep',
+     N'jTBD', N'LEFT', N'jTBD.TimeByDay = src.TimeByDay', 1, N'MANUAL')
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+/* Phase N — FiscalPeriodId → jTBD.FiscalPeriodUID */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'FiscalPeriodUID',
+    SourceAlias      = N'jTBD',
+    SourceExpression = N'jTBD.[FiscalPeriodUID]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'ResourceTimephasedDataSet', N'ResourceDemandTimephasedDataSet')
+  AND Column_EN     = N'FiscalPeriodId'
+  AND MapStatus    <> N'MANUAL';
+
+/* Phase N — ResourceModifiedDate → jResource.ResourceModifiedDate (jResource déjà créé Phase K) */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jResource',
+    SourceExpression = N'jResource.[ResourceModifiedDate]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'ResourceTimephasedDataSet'
+  AND Column_EN     = N'ResourceModifiedDate'
+  AND MapStatus    <> N'MANUAL';
+
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M résolus.';
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N résolus.';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',

@@ -5,7 +5,7 @@
     Role        : Créer les vues OData-like ProjectOnline depuis un snapshot figé dans la trousse V6.
 
     Notes V6
-    - Ne depend plus de SP_SPR_POC_Contenu au runtime.
+    - Ne depend plus de la BD de contenu au runtime.
     - Les couches internes tbx/tbx_fr/tbx_master sont intégrées dans ce script pour exécution SSMS directe.
     - Les vues publiques ProjectData.* sont regénérées depuis tbx.vw_* en excluant les champs personnalisés
       présents dans la BD content PSSE. Les champs personnalisés client seront ajoutés par une tranche ultérieure.

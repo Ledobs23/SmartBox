@@ -19,6 +19,12 @@
       NAVIGATION       = Colonne non-PRIMITIVE (lien navigationnel OData) -> expression non auto-résolue
     - Langue ciblée par cfg.PWA.Language (FR ou EN) : les deux alias (Column_FR, Column_EN) sont stockés.
     - Journalisation dans log.ScriptExecutionLog et stg.EntityDraftBuildLog.
+
+    Étapes post-publication (après MERGE dic.EntityColumnPublication)
+    - ETAPE E2 : Match normalisé (champs custom sans espaces OData vs avec espaces PSSE)
+    - ETAPE E3 : Correction jointures TypeName/TypeDescription (Resources j1, Assignments j3)
+    - ETAPE E4 : Jointures dérivées ProjectName/TaskName/ParentTaskName (Tasks, Assignments, ATD)
+    - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -713,6 +719,306 @@ EXEC log.usp_WriteScriptLog
     @Phase=N'PUBLICATION', @Severity=N'INFO', @Status=N'COMPLETED',
     @Message=@Msg,
     @RowsAffected=@PublicationCount;
+
+/* ===========================================================================================
+   ETAPE E2 : Résolution normalisée des colonnes UNMAPPED (champs personnalisés)
+   L'API OData normalise les noms de champs en supprimant les espaces et certains caractères
+   spéciaux ("Cat de proj" -> "Catdeproj", "Afficher rapport_T" -> "Afficherrapport_T").
+   La Phase F de v6_05a fait un match exact qui échoue pour ces colonnes. Ce bloc applique
+   un match normalisé (suppression espaces + tirets + parenthèses, COLLATE Latin1_General_CI_AI
+   pour l'insensibilité aux accents) sur stg.ColumnInventory depuis la table primaire du binding.
+   Les noms OData (Column_EN) sont PRÉSERVÉS comme alias de vue — seul SourceExpression change.
+   Applicable à toutes instances PWA. Overrides MANUAL préservés.
+   =========================================================================================== */
+DECLARE @NormMatchCount int = 0;
+
+UPDATE ecp
+SET
+    ecp.PsseSourceSchema = eb.PsseSchemaName,
+    ecp.PsseSourceObject = eb.PsseObjectName,
+    ecp.PsseColumnName   = ci.ColumnName,
+    ecp.SourceAlias      = eb.BindingAlias,
+    ecp.SourceExpression = QUOTENAME(eb.BindingAlias) + N'.' + QUOTENAME(ci.ColumnName),
+    ecp.MapStatus        = N'MAPPED',
+    ecp.IsPublished      = 1,
+    ecp.PublishedOn      = sysdatetime(),
+    ecp.UpdatedOn        = sysdatetime(),
+    ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN dic.EntityBinding eb
+    ON  eb.EntityName_EN  = ecp.EntityName_EN
+    AND eb.IsActive       = 1
+    AND eb.PsseObjectName IS NOT NULL
+JOIN (SELECT DISTINCT PWAId, SourceSchemaName, SourceObjectName, ColumnName
+      FROM stg.ColumnInventory) ci
+    ON  ci.PWAId            = @PwaId
+    AND ci.SourceSchemaName = eb.PsseSchemaName
+    AND ci.SourceObjectName = eb.PsseObjectName
+    AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(
+            ci.ColumnName  COLLATE Latin1_General_CI_AI,
+            N' ', N''), N'-', N''), N'(', N''), N')', N''))
+      = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(
+            ecp.Column_EN COLLATE Latin1_General_CI_AI,
+            N' ', N''), N'-', N''), N'(', N''), N')', N''))
+WHERE ecp.MapStatus    = N'UNMAPPED'
+  AND ecp.PsseColumnName IS NULL
+  AND ecp.MapStatus   <> N'MANUAL';
+
+SET @NormMatchCount = @@ROWCOUNT;
+
+/* Cas particulier : ResourceTimesheetManageId -> ResourceTimesheetManagerUID
+   Le nom OData (sans "r", "Id" au lieu de "UID") diffère même après normalisation.
+   On mappe directement vers la colonne PSSE connue, en vérifiant son existence. */
+UPDATE ecp
+SET ecp.PsseSourceSchema = eb.PsseSchemaName,
+    ecp.PsseSourceObject = eb.PsseObjectName,
+    ecp.PsseColumnName   = N'ResourceTimesheetManagerUID',
+    ecp.SourceAlias      = eb.BindingAlias,
+    ecp.SourceExpression = QUOTENAME(eb.BindingAlias) + N'.[ResourceTimesheetManagerUID]',
+    ecp.MapStatus        = N'MAPPED',
+    ecp.IsPublished      = 1,
+    ecp.PublishedOn      = sysdatetime(),
+    ecp.UpdatedOn        = sysdatetime(),
+    ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN dic.EntityBinding eb
+    ON eb.EntityName_EN = ecp.EntityName_EN AND eb.IsActive = 1
+WHERE ecp.EntityName_EN = N'Resources'
+  AND ecp.Column_EN     = N'ResourceTimesheetManageId'
+  AND ecp.MapStatus     = N'UNMAPPED'
+  AND ecp.MapStatus    <> N'MANUAL'
+  AND EXISTS (
+      SELECT 1 FROM stg.ColumnInventory ci2
+      WHERE ci2.SourceObjectName = eb.PsseObjectName
+        AND ci2.ColumnName       = N'ResourceTimesheetManagerUID'
+        AND ci2.PWAId            = @PwaId
+  );
+
+SET @NormMatchCount += @@ROWCOUNT;
+
+SET @Msg = CONCAT(N'ETAPE E2 : ', @NormMatchCount,
+    N' colonne(s) UNMAPPED résolues par match normalisé (champs personnalisés avec espaces).');
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'NORM_MATCH', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@NormMatchCount;
+
+/* ===========================================================================================
+   ETAPE E3 : Correction des jointures de type (TypeName, TypeDescription)
+   Resources j1 (MSP_EpmResourceType) et Assignments j3 (MSP_EpmAssignmentType) avaient
+   une condition TODO. On fixe la condition (clé métier + SiteId + LCID depuis cfg.PWA)
+   et on active les colonnes correspondantes dans dic.EntityColumnPublication.
+   Overrides MANUAL préservés.
+   =========================================================================================== */
+
+/* Resources j1 : MSP_EpmResourceType -> ResourceType + LCID (MSP_EpmResourceType n'a pas de SiteId) */
+UPDATE dic.EntityJoin
+SET JoinExpression = N'j1.ResourceType = src.ResourceType'
+    + N' AND j1.LCID = (SELECT TOP 1 CASE WHEN Language = N''FR'' THEN 1036 ELSE 1033 END FROM cfg.PWA)',
+    JoinStatus     = N'PROPOSED',
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE EntityName_EN = N'Resources'
+  AND JoinTag       = N'j1'
+  AND JoinStatus   <> N'MANUAL';
+
+/* Assignments j3 : MSP_EpmAssignmentType -> AssignmentType + LCID (MSP_EpmAssignmentType n'a pas de SiteId) */
+UPDATE dic.EntityJoin
+SET JoinExpression = N'j3.AssignmentType = src.AssignmentType'
+    + N' AND j3.LCID = (SELECT TOP 1 CASE WHEN Language = N''FR'' THEN 1036 ELSE 1033 END FROM cfg.PWA)',
+    JoinStatus     = N'PROPOSED',
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE EntityName_EN = N'Assignments'
+  AND JoinTag       = N'j3'
+  AND JoinStatus   <> N'MANUAL';
+
+/* Activer TypeName et TypeDescription dans dic.EntityColumnPublication */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'j1',
+    SourceExpression = N'j1.' + QUOTENAME(Column_EN),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Resources'
+  AND Column_EN IN (N'TypeName', N'TypeDescription')
+  AND MapStatus    <> N'MANUAL';
+
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'j3',
+    SourceExpression = N'j3.' + QUOTENAME(Column_EN),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Assignments'
+  AND Column_EN IN (N'TypeName', N'TypeDescription')
+  AND MapStatus    <> N'MANUAL';
+
+SET @Msg = N'ETAPE E3 : jointures TypeName/TypeDescription résolues pour Resources (j1) et Assignments (j3). 4 colonnes activées.';
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'TYPE_JOIN_FIX', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=4;
+
+/* ===========================================================================================
+   ETAPE E4 : Jointures dérivées — ProjectName, TaskName, ParentTaskName
+   Ces colonnes existent dans l'endpoint OData mais nécessitent des jointures supplémentaires
+   non auto-détectées : jointure vers MSP_EpmProject_UserView (ProjectName), vers
+   MSP_EpmTask_UserView (TaskName), et auto-jointure sur la tâche parente (ParentTaskName).
+   Pour AssignmentTimephasedDataSet, les jointures passent par j1 (MSP_EpmAssignment_UserView).
+   MERGE idempotent — JoinStatus MANUAL protège des futures exécutions de v6_06a.
+   =========================================================================================== */
+MERGE dic.EntityJoin AS T
+USING
+(
+    VALUES
+        /* Tasks : ProjectName depuis MSP_EpmProject_UserView */
+        (N'Tasks', N'jProject', N'pjrep', N'MSP_EpmProject_UserView', N'src_pjrep',
+         N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+        /* Tasks : ParentTaskName via auto-jointure (tâche parente de la tâche courante) */
+        (N'Tasks', N'jParent', N'pjrep', N'MSP_EpmTask_UserView', N'src_pjrep',
+         N'jParent', N'LEFT', N'jParent.TaskUID = src.TaskParentUID', 1, N'MANUAL'),
+        /* Assignments : ProjectName */
+        (N'Assignments', N'jProject', N'pjrep', N'MSP_EpmProject_UserView', N'src_pjrep',
+         N'jProject', N'LEFT', N'jProject.ProjectUID = src.ProjectUID', 1, N'MANUAL'),
+        /* Assignments : TaskName */
+        (N'Assignments', N'jTask', N'pjrep', N'MSP_EpmTask_UserView', N'src_pjrep',
+         N'jTask', N'LEFT', N'jTask.TaskUID = src.TaskUID', 1, N'MANUAL'),
+        /* AssignmentTimephasedDataSet : ProjectName via j1.ProjectUID (j1 = MSP_EpmAssignment_UserView) */
+        (N'AssignmentTimephasedDataSet', N'jProject', N'pjrep', N'MSP_EpmProject_UserView', N'src_pjrep',
+         N'jProject', N'LEFT', N'jProject.ProjectUID = j1.ProjectUID', 1, N'MANUAL'),
+        /* AssignmentTimephasedDataSet : TaskName via j1.TaskUID */
+        (N'AssignmentTimephasedDataSet', N'jTask', N'pjrep', N'MSP_EpmTask_UserView', N'src_pjrep',
+         N'jTask', N'LEFT', N'jTask.TaskUID = j1.TaskUID', 1, N'MANUAL')
+) AS S (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+        JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  T.EntityName_EN = S.EntityName_EN
+AND T.JoinTag       = S.JoinTag
+WHEN MATCHED AND T.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET
+        T.PsseSchemaName     = S.PsseSchemaName,
+        T.PsseObjectName     = S.PsseObjectName,
+        T.SmartBoxSchemaName = S.SmartBoxSchemaName,
+        T.JoinAlias          = S.JoinAlias,
+        T.JoinType           = S.JoinType,
+        T.JoinExpression     = S.JoinExpression,
+        T.IsActive           = S.IsActive,
+        T.JoinStatus         = S.JoinStatus,
+        T.UpdatedOn          = sysdatetime(),
+        T.UpdatedBy          = suser_sname()
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (S.EntityName_EN, S.JoinTag, S.PsseSchemaName, S.PsseObjectName, S.SmartBoxSchemaName,
+            S.JoinAlias, S.JoinType, S.JoinExpression, S.IsActive, S.JoinStatus);
+
+/* Activer les colonnes correspondantes dans dic.EntityColumnPublication */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jProject',
+    SourceExpression = N'jProject.[ProjectName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'Tasks', N'Assignments', N'AssignmentTimephasedDataSet')
+  AND Column_EN    = N'ProjectName'
+  AND MapStatus   <> N'MANUAL';
+
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jTask',
+    SourceExpression = N'jTask.[TaskName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'Assignments', N'AssignmentTimephasedDataSet')
+  AND Column_EN    = N'TaskName'
+  AND MapStatus   <> N'MANUAL';
+
+/* ParentTaskName : colonne dérivée de l'auto-jointure jParent (jParent.TaskUID = src.TaskParentUID) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmTask_UserView',
+    PsseColumnName   = N'TaskName',
+    SourceAlias      = N'jParent',
+    SourceExpression = N'jParent.[TaskName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Tasks'
+  AND Column_EN     = N'ParentTaskName'
+  AND MapStatus    <> N'MANUAL';
+
+SET @Msg = N'ETAPE E4 : jointures jProject/jTask/jParent insérées. ProjectName, TaskName, ParentTaskName activés (Tasks, Assignments, AssignmentTimephasedDataSet).';
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@@ROWCOUNT;
+
+/* ===========================================================================================
+   ETAPE E5 : Marquage des jointures SiteId croisées (SITEID_CROSS)
+   Certaines jointures auto-détectées utilisent uniquement [SiteId] = src.[SiteId] comme clé.
+   SiteId est identique pour toutes les lignes d'un même tenant PWA : c'est un produit
+   cartésien. On les marque MANUAL_REQUIRED pour les exclure de la génération de vues.
+   Les colonnes dépendantes sont remises à UNMAPPED (CAST NULL) pour éviter des erreurs SQL
+   à la compilation de la vue (référence à un alias non joint).
+   Overrides MANUAL préservés. Les jointures E3/E4 utilisent SiteId COMBINÉ avec une clé
+   métier (sans crochets) et ne sont pas affectées par ce filtre.
+   =========================================================================================== */
+DECLARE @SiteIdCrossCount int = 0;
+
+UPDATE dic.EntityJoin
+SET JoinExpression = N'/* TODO: SITEID_CROSS - remplacer par la vraie clé de jointure.'
+    + N' SiteId est identique pour toutes les lignes PWA : produit cartésien garanti. */',
+    JoinStatus     = N'MANUAL_REQUIRED',
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE JoinExpression LIKE N'%.[SiteId] = src.[SiteId]%'
+  AND JoinStatus  <> N'MANUAL';
+
+SET @SiteIdCrossCount = @@ROWCOUNT;
+
+/* Remettre à UNMAPPED (CAST NULL) les colonnes dont la source pointait vers une jointure croisée */
+UPDATE ecp
+SET ecp.SourceAlias      = NULL,
+    ecp.SourceExpression = NULL,
+    ecp.MapStatus        = N'UNMAPPED',
+    ecp.IsPublished      = 1,
+    ecp.UpdatedOn        = sysdatetime(),
+    ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN dic.EntityJoin ej
+    ON  ej.EntityName_EN = ecp.EntityName_EN
+    AND ej.JoinAlias     = ecp.SourceAlias
+    AND ej.JoinStatus    = N'MANUAL_REQUIRED'
+    AND ej.JoinExpression LIKE N'%TODO: SITEID_CROSS%'
+WHERE ecp.MapStatus <> N'MANUAL'
+  AND ecp.SourceAlias IS NOT NULL;
+
+SET @Msg = CONCAT(N'ETAPE E5 : ', @SiteIdCrossCount,
+    N' jointure(s) SiteId croisée(s) marquées TODO (SITEID_CROSS).',
+    N' Colonnes dépendantes remises à UNMAPPED (CAST NULL).',
+    N' Mettre à jour dic.EntityJoin avec la vraie clé FK, puis rejouer v6_06a.');
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'SITEID_CROSS', @Severity=N'WARNING', @Status=N'WARNING',
+    @Message=@Msg, @RowsAffected=@SiteIdCrossCount;
+
+/* Recompte après corrections E2-E5 */
+SELECT
+    @MappedCount          = SUM(CASE WHEN MapStatus = N'MAPPED'            THEN 1 ELSE 0 END),
+    @MappedNeedsJoinCount = SUM(CASE WHEN MapStatus = N'MAPPED_NEEDS_JOIN' THEN 1 ELSE 0 END),
+    @UnmappedCount        = SUM(CASE WHEN MapStatus = N'UNMAPPED'          THEN 1 ELSE 0 END),
+    @NavigationCount      = SUM(CASE WHEN MapStatus = N'NAVIGATION'        THEN 1 ELSE 0 END)
+FROM dic.EntityColumnPublication;
 
 /* ===========================================================================================
    ETAPE F : Journal de construction (stg.EntityDraftBuildLog)

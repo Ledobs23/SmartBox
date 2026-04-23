@@ -8,14 +8,14 @@
     Notes V6
     - Prérequis : v6_06a exécuté (dic.EntityBinding, dic.EntityJoin, dic.EntityColumnPublication).
     - Ne touche pas aux vues déjà générées par v6_04a sauf si l'entité est dans dic.EntityBinding.
-    - Langue des alias dans ProjectData.* pilotée par cfg.PWA.Language (FR ou EN).
+    - ProjectData publie désormais les façades EN et FR en parallèle.
     - tbx_fr.* génère toujours les alias FR (pour les clients FR). tbx.* génère toujours EN.
     - Colonnes MAPPED     : SourceExpression AS alias
     - Colonnes UNMAPPED   : FallbackExpression (CAST NULL) AS alias
     - Colonnes NAVIGATION sans source : CAST(NULL AS nvarchar(255)) AS alias
     - Colonnes MAPPED_NEEDS_JOIN (IsPublished=0) : exclues de la vue jusqu'à résolution.
-    - ProjectData : nom de vue = EntityName_FR si PwaLanguage=FR (ex. Projets), EntityName_EN sinon (ex. Projects).
-                   Aliases colonnes = Column_FR si PwaLanguage=FR, Column_EN sinon.
+    - ProjectData : génération de ProjectData.<EntityName_EN> avec alias EN et, si disponible,
+                   de ProjectData.<EntityName_FR> avec alias FR.
     - tbx_fr     : nom de vue = vw_EntityName_FR (ex. vw_Projets), aliases Column_FR (toujours FR).
     - tbx        : nom de vue = vw_EntityName_EN, aliases Column_EN (toujours EN, couche interne).
     - En cas d'erreur sur une entité : log + continuation sur les entités suivantes.
@@ -65,7 +65,7 @@ DECLARE @ScriptName    sysname          = N'v6_07a_Generate_Views_From_Publicati
 DECLARE @PwaLanguage   nvarchar(10);
 DECLARE @TargetSchemas nvarchar(200);
 
-/* Schémas cibles à générer: ProjectData (alias langue cible), tbx (EN), tbx_fr (FR) */
+/* Schémas cibles à générer: ProjectData (EN + FR), tbx (EN), tbx_fr (FR) */
 /* Modifiable ici si besoin de restreindre la génération */
 DECLARE @GenProjectData bit = 1;
 DECLARE @GenTbx         bit = 1;
@@ -108,67 +108,11 @@ EXEC log.usp_WriteScriptLog
     @Message=@Msg;
 
 /* ===========================================================================================
-   Nettoyage des vues orphelines dans ProjectData
-   Quand PwaLanguage=FR : supprimer toute vue ProjectData dont le nom correspond au
-   EntityName_EN d'une entité qui possède un EntityName_FR différent.
-   Évite les doublons EN+FR après une re-génération sans v6_00z.
+   ProjectData publie désormais les vues EN et FR côte à côte.
+   On ne supprime donc plus les vues ProjectData sur simple bascule de langue du tenant.
    =========================================================================================== */
 DECLARE @OrphanSql nvarchar(max);
 DECLARE @OrphanCount int = 0;
-
-IF @PwaLanguage = N'FR'
-BEGIN
-    SELECT @OrphanSql = STRING_AGG(
-        CONVERT(nvarchar(max),
-            N'DROP VIEW IF EXISTS [ProjectData].' + QUOTENAME(eb.EntityName_EN) + N';'),
-        CHAR(10)
-    )
-    FROM dic.EntityBinding eb
-    JOIN sys.views v ON v.name = eb.EntityName_EN
-        AND SCHEMA_NAME(v.schema_id) = N'ProjectData'
-    WHERE eb.EntityName_FR IS NOT NULL
-      AND eb.EntityName_FR <> eb.EntityName_EN
-      AND eb.IsActive = 1;
-
-    IF @OrphanSql IS NOT NULL
-    BEGIN
-        SELECT @OrphanCount = (LEN(@OrphanSql) - LEN(REPLACE(@OrphanSql, N'DROP VIEW', N'')))
-                              / LEN(N'DROP VIEW');
-        EXEC sys.sp_executesql @OrphanSql;
-        SET @Msg = CONCAT(N'Vues orphelines EN supprimées de ProjectData (Language=FR): ', @OrphanCount);
-        EXEC log.usp_WriteScriptLog
-            @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
-            @Phase=N'ORPHAN_CLEANUP', @Severity=N'INFO', @Status=N'COMPLETED',
-            @Message=@Msg, @RowsAffected=@OrphanCount;
-    END;
-END
-ELSE IF @PwaLanguage = N'EN'
-BEGIN
-    /* Symétrique : quand Language=EN, supprimer les vues FR orphelines */
-    SELECT @OrphanSql = STRING_AGG(
-        CONVERT(nvarchar(max),
-            N'DROP VIEW IF EXISTS [ProjectData].' + QUOTENAME(eb.EntityName_FR) + N';'),
-        CHAR(10)
-    )
-    FROM dic.EntityBinding eb
-    JOIN sys.views v ON v.name = eb.EntityName_FR
-        AND SCHEMA_NAME(v.schema_id) = N'ProjectData'
-    WHERE eb.EntityName_FR IS NOT NULL
-      AND eb.EntityName_FR <> eb.EntityName_EN
-      AND eb.IsActive = 1;
-
-    IF @OrphanSql IS NOT NULL
-    BEGIN
-        SELECT @OrphanCount = (LEN(@OrphanSql) - LEN(REPLACE(@OrphanSql, N'DROP VIEW', N'')))
-                              / LEN(N'DROP VIEW');
-        EXEC sys.sp_executesql @OrphanSql;
-        SET @Msg = CONCAT(N'Vues orphelines FR supprimées de ProjectData (Language=EN): ', @OrphanCount);
-        EXEC log.usp_WriteScriptLog
-            @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
-            @Phase=N'ORPHAN_CLEANUP', @Severity=N'INFO', @Status=N'COMPLETED',
-            @Message=@Msg, @RowsAffected=@OrphanCount;
-    END;
-END;
 
 /* ===========================================================================================
    Nettoyage des vues orphelines dans tbx_fr
@@ -264,13 +208,22 @@ BEGIN
     FROM dic.EntityJoin ej
     WHERE ej.EntityName_EN = @EntityName_EN
       AND ej.IsActive = 1
-      AND ej.JoinExpression NOT LIKE N'/* TODO%';
+      AND ej.JoinExpression NOT LIKE N'/* TODO%'
+      AND EXISTS
+      (
+          SELECT 1
+          FROM dic.EntityColumnPublication ecp
+          WHERE ecp.EntityName_EN = @EntityName_EN
+            AND ecp.IsPublished = 1
+            AND ecp.SourceAlias = ej.JoinAlias
+            AND ecp.MapStatus IN (N'MAPPED', N'MAPPED_NEEDS_JOIN')
+      );
 
     /* Construire la liste de colonnes EN */
     SELECT @ColListEN = STRING_AGG(
         CONVERT(nvarchar(max),
             CASE
-                WHEN ecp.MapStatus IN (N'MAPPED') AND ecp.SourceExpression IS NOT NULL
+                WHEN ecp.MapStatus IN (N'MAPPED', N'MAPPED_NEEDS_JOIN') AND ecp.SourceExpression IS NOT NULL
                     THEN ecp.SourceExpression + N' AS ' + QUOTENAME(ecp.Column_EN)
                 WHEN ecp.MapStatus = N'UNMAPPED' AND ecp.FallbackExpression IS NOT NULL
                     THEN ecp.FallbackExpression + N' AS ' + QUOTENAME(ecp.Column_EN)
@@ -289,7 +242,7 @@ BEGIN
     SELECT @ColListFR = STRING_AGG(
         CONVERT(nvarchar(max),
             CASE
-                WHEN ecp.MapStatus IN (N'MAPPED') AND ecp.SourceExpression IS NOT NULL
+                WHEN ecp.MapStatus IN (N'MAPPED', N'MAPPED_NEEDS_JOIN') AND ecp.SourceExpression IS NOT NULL
                     THEN ecp.SourceExpression + N' AS ' + QUOTENAME(ISNULL(ecp.Column_FR, ecp.Column_EN))
                 WHEN ecp.MapStatus = N'UNMAPPED' AND ecp.FallbackExpression IS NOT NULL
                     THEN ecp.FallbackExpression + N' AS ' + QUOTENAME(ISNULL(ecp.Column_FR, ecp.Column_EN))
@@ -305,26 +258,21 @@ BEGIN
       AND ecp.IsPublished = 1;
 
     /* ---------------------------------------------------------------------------------
-       Générer ProjectData.<EntityName_FR ou EN selon PwaLanguage> avec alias selon PwaLanguage
-       Le nom de vue suit la langue du tenant : si FR -> EntityName_FR (ex. Projets),
-       si EN -> EntityName_EN (ex. Projects).
+       Générer ProjectData.<EntityName_EN> avec alias EN, puis ProjectData.<EntityName_FR>
+       avec alias FR lorsque le libellé français diffère.
        --------------------------------------------------------------------------------- */
     IF @GenProjectData = 1 AND @ColListEN IS NOT NULL
     BEGIN
         SET @ViewSchema = N'ProjectData';
-        SET @ViewName   = CASE WHEN @PwaLanguage = N'FR'
-                               THEN ISNULL(@EntityName_FR, @EntityName_EN)
-                               ELSE @EntityName_EN
-                          END;
+        SET @ViewName   = @EntityName_EN;
 
         SET @ViewSql = CONCAT(
             N'CREATE OR ALTER VIEW ', QUOTENAME(@ViewSchema), N'.', QUOTENAME(@ViewName), N' AS',
             N'
-/* SmartBox V6 - Generated from dic.EntityColumnPublication - PwaLanguage=', @PwaLanguage, N' */',
+/* SmartBox V6 - ProjectData EN - Generated from dic.EntityColumnPublication */',
             N'
 SELECT
-    ',
-            CASE WHEN @PwaLanguage = N'FR' THEN @ColListFR ELSE @ColListEN END,
+    ', @ColListEN,
             N'
 FROM ', @FromClause,
             CASE WHEN @JoinClauses IS NOT NULL THEN N'
@@ -353,6 +301,47 @@ FROM ', @FromClause,
                 @Message=@Msg,
                 @ErrorNumber=@ErrNum, @ErrorMessage=@ErrMsg;
         END CATCH;
+
+        IF @ColListFR IS NOT NULL
+           AND ISNULL(@EntityName_FR, @EntityName_EN) <> @EntityName_EN
+        BEGIN
+            SET @ViewName = ISNULL(@EntityName_FR, @EntityName_EN);
+            SET @ViewSql = CONCAT(
+                N'CREATE OR ALTER VIEW ', QUOTENAME(@ViewSchema), N'.', QUOTENAME(@ViewName), N' AS',
+                N'
+/* SmartBox V6 - ProjectData FR - Generated from dic.EntityColumnPublication */',
+                N'
+SELECT
+    ', @ColListFR,
+                N'
+FROM ', @FromClause,
+                CASE WHEN @JoinClauses IS NOT NULL THEN N'
+    ' + @JoinClauses ELSE N'' END,
+                N';'
+            );
+
+            BEGIN TRY
+                EXEC sys.sp_executesql @ViewSql;
+                SET @ViewCreated += 1;
+                INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
+                VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED',
+                        CONCAT(N'Vue générée depuis dic.EntityColumnPublication. Source: ', @PsseObject));
+            END TRY
+            BEGIN CATCH
+                SET @ErrMsg = ERROR_MESSAGE();
+                SET @ErrNum = ERROR_NUMBER();
+                SET @ViewFailed += 1;
+                INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
+                VALUES (@RunId, @ViewSchema, @ViewName, N'ERROR',
+                        CONCAT(N'Erreur ', @ErrNum, N': ', @ErrMsg));
+                SET @Msg = CONCAT(N'Échec de la vue ', @ViewSchema, N'.', @ViewName, N': ', @ErrMsg);
+                EXEC log.usp_WriteScriptLog
+                    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+                    @Phase=N'VIEW_ERROR', @Severity=N'WARN', @Status=N'WARNING',
+                    @Message=@Msg,
+                    @ErrorNumber=@ErrNum, @ErrorMessage=@ErrMsg;
+            END CATCH;
+        END;
     END;
 
     /* ---------------------------------------------------------------------------------

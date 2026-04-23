@@ -589,11 +589,25 @@ FROM dic.EntityColumnMap ecm
 LEFT JOIN dic.EntityBinding eb
     ON eb.EntityName_EN = ecm.EntityName_EN
    AND eb.IsActive = 1
-LEFT JOIN dic.EntityJoin ej
+LEFT JOIN
+(
+    SELECT
+        EntityName_EN,
+        PsseObjectName,
+        JoinAlias,
+        JoinStatus,
+        ROW_NUMBER() OVER
+        (
+            PARTITION BY EntityName_EN, PsseObjectName
+            ORDER BY ColumnCoverage DESC, JoinTag
+        ) AS rn
+    FROM dic.EntityJoin
+    WHERE IsActive = 1
+      AND JoinStatus NOT IN (N'MANUAL_REQUIRED')
+) ej
     ON ej.EntityName_EN  = ecm.EntityName_EN
    AND ej.PsseObjectName = ecm.PsseSourceObject
-   AND ej.IsActive = 1
-   AND ej.JoinStatus NOT IN (N'MANUAL_REQUIRED'); /* colonnes dont la jointure est invalide -> MAPPED_NEEDS_JOIN */
+   AND ej.rn = 1; /* retenir une seule jointure active par objet secondaire */
 
 SET @MapDraftCount = @@ROWCOUNT;
 

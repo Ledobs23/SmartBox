@@ -796,6 +796,75 @@ JOIN stg.ColumnInventory ci
    AND ci.PWAId = @PwaId
 WHERE ecm.ColumnClassification = N'PRIMITIVE';
 
+/* Correspondances heuristiques : variantes PSSE usuelles de type Id -> UID */
+;WITH candidate_columns AS
+(
+    SELECT
+        ecm.EntityName_EN,
+        ecm.Column_EN,
+        ecm.Column_FR,
+        ecm.ColumnClassification,
+        cand.MatchType,
+        cand.CandidateColumnName
+    FROM dic.EntityColumnMap ecm
+    CROSS APPLY
+    (
+        VALUES
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN LIKE N'%Id'
+                     THEN LEFT(ecm.Column_EN, LEN(ecm.Column_EN) - 2) + N'UID'
+                END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'ParentTaskId' THEN N'TaskParentUID' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'TaskFixedCostAssignmentId' THEN N'FixedCostAssignmentUID' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'ProjectOwnerId' THEN N'ProjectOwnerResourceUID' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'ResourceOwnerId' THEN N'ResourceOwnerUID' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'TimesheetOwnerId' THEN N'OwnerResourceNameUID' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'TimesheetOwner' THEN N'ResourceName' END),
+            (N'HEURISTIC_UID',
+                CASE WHEN ecm.Column_EN = N'StatusDescription' THEN N'Description' END)
+    ) cand (MatchType, CandidateColumnName)
+    WHERE ecm.ColumnClassification = N'PRIMITIVE'
+      AND cand.CandidateColumnName IS NOT NULL
+)
+INSERT INTO stg.ODataPsseExactColumnMatch
+(
+    RunId, EntityName_EN, Column_EN, Column_FR, ColumnClassification,
+    PsseDatabaseName, PsseSchemaName, PsseObjectName, PsseColumnName,
+    MatchType, ObjectMatchCount
+)
+SELECT
+    @RunId,
+    cc.EntityName_EN,
+    cc.Column_EN,
+    cc.Column_FR,
+    cc.ColumnClassification,
+    ci.SourceDatabaseName,
+    ci.SourceSchemaName,
+    ci.SourceObjectName,
+    ci.ColumnName,
+    cc.MatchType,
+    COUNT(ci.ColumnInventoryId) OVER (PARTITION BY cc.EntityName_EN, cc.Column_EN, ci.SourceObjectName)
+FROM candidate_columns cc
+JOIN stg.ColumnInventory ci
+    ON ci.ColumnName = cc.CandidateColumnName
+   AND ci.PWAId = @PwaId
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM stg.ODataPsseExactColumnMatch m
+    WHERE m.RunId = @RunId
+      AND m.EntityName_EN = cc.EntityName_EN
+      AND m.Column_EN = cc.Column_EN
+      AND m.PsseObjectName = ci.SourceObjectName
+      AND m.PsseColumnName = ci.ColumnName
+);
+
 /* Colonnes OData sans correspondance dans PSSE */
 INSERT INTO stg.ODataPsseExactColumnMatch
 (
@@ -817,15 +886,18 @@ WHERE ecm.ColumnClassification = N'PRIMITIVE'
   AND NOT EXISTS
   (
       SELECT 1
-      FROM stg.ColumnInventory ci
-      WHERE ci.ColumnName = ecm.Column_EN
-        AND ci.PWAId = @PwaId
+      FROM stg.ODataPsseExactColumnMatch m
+      WHERE m.RunId = @RunId
+        AND m.EntityName_EN = ecm.EntityName_EN
+        AND m.Column_EN = ecm.Column_EN
+        AND m.MatchType <> N'NO_MATCH'
   );
 
 DECLARE @ExactCount int = (SELECT COUNT(*) FROM stg.ODataPsseExactColumnMatch WHERE RunId=@RunId AND MatchType=N'EXACT');
+DECLARE @HeuristicCount int = (SELECT COUNT(*) FROM stg.ODataPsseExactColumnMatch WHERE RunId=@RunId AND MatchType=N'HEURISTIC_UID');
 DECLARE @NoMatchCount int = (SELECT COUNT(*) FROM stg.ODataPsseExactColumnMatch WHERE RunId=@RunId AND MatchType=N'NO_MATCH');
 
-SET @Msg = CONCAT(N'Matching OData/PSSE terminé. EXACT=',@ExactCount,N'; NO_MATCH=',@NoMatchCount,N'.');
+SET @Msg = CONCAT(N'Matching OData/PSSE terminé. EXACT=',@ExactCount,N'; HEURISTIC_UID=',@HeuristicCount,N'; NO_MATCH=',@NoMatchCount,N'.');
 EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion=N'V6-DRAFT',
     @Phase=N'COLUMN_MATCH',@Severity=N'INFO',@Status=N'COMPLETED',
     @Message=@Msg,@RowsAffected=@ExactCount;
@@ -834,7 +906,24 @@ EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion
    PHASE G : ENRICHISSEMENT dic.EntityColumnMap avec source PSSE dominante par entité
    Pour chaque (EntityName_EN, Column_EN), choisir le SourceObject le plus representatif.
    =========================================================================================== */
-;WITH ranked_sources AS
+UPDATE dic.EntityColumnMap
+SET
+    PsseSourceSchema = NULL,
+    PsseSourceObject = NULL,
+    PsseColumnName   = NULL,
+    PsseMatchScore   = NULL,
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE ColumnClassification = N'PRIMITIVE';
+
+;WITH source_hints AS
+(
+    SELECT N'Assignments' AS EntityName_EN, N'pjrep' AS PreferredSchema, N'MSP_EpmAssignment_UserView' AS PreferredObject UNION ALL
+    SELECT N'Projects',    N'pjrep', N'MSP_EpmProject_UserView' UNION ALL
+    SELECT N'Tasks',       N'pjrep', N'MSP_EpmTask_UserView' UNION ALL
+    SELECT N'Timesheets',  N'pjrep', N'MSP_Timesheet'
+),
+ranked_sources AS
 (
     SELECT
         m.EntityName_EN,
@@ -843,30 +932,50 @@ EXEC log.usp_WriteScriptLog @RunId=@RunId,@ScriptName=@ScriptName,@ScriptVersion
         m.PsseObjectName,
         m.PsseColumnName,
         obj_score.obj_col_count,
+        CASE m.MatchType
+            WHEN N'EXACT' THEN 0
+            WHEN N'HEURISTIC_UID' THEN 1
+            ELSE 9
+        END AS MatchPriority,
         ROW_NUMBER() OVER
         (
             PARTITION BY m.EntityName_EN, m.Column_EN
-            ORDER BY obj_score.obj_col_count DESC, m.PsseObjectName
+            ORDER BY
+                     CASE WHEN sh.PreferredSchema = m.PsseSchemaName
+                            AND sh.PreferredObject = m.PsseObjectName THEN 0 ELSE 1 END,
+                     obj_score.obj_col_count DESC,
+                     CASE m.MatchType WHEN N'EXACT' THEN 0 WHEN N'HEURISTIC_UID' THEN 1 ELSE 9 END,
+                     m.PsseObjectName
         ) AS rn
     FROM stg.ODataPsseExactColumnMatch m
+    LEFT JOIN source_hints sh
+        ON sh.EntityName_EN = m.EntityName_EN
     JOIN
     (
-        SELECT EntityName_EN, PsseObjectName, COUNT(*) AS obj_col_count
+        SELECT
+            EntityName_EN,
+            PsseObjectName,
+            SUM(CASE MatchType
+                    WHEN N'EXACT' THEN 100
+                    WHEN N'HEURISTIC_UID' THEN 25
+                    ELSE 0
+                END) AS obj_col_count
         FROM stg.ODataPsseExactColumnMatch
-        WHERE RunId = @RunId AND MatchType = N'EXACT'
+        WHERE RunId = @RunId
+          AND MatchType IN (N'EXACT', N'HEURISTIC_UID')
         GROUP BY EntityName_EN, PsseObjectName
     ) AS obj_score
         ON obj_score.EntityName_EN = m.EntityName_EN
        AND obj_score.PsseObjectName = m.PsseObjectName
     WHERE m.RunId = @RunId
-      AND m.MatchType = N'EXACT'
+      AND m.MatchType IN (N'EXACT', N'HEURISTIC_UID')
 )
 UPDATE ecm
 SET
     ecm.PsseSourceSchema = rs.PsseSchemaName,
     ecm.PsseSourceObject = rs.PsseObjectName,
     ecm.PsseColumnName   = rs.PsseColumnName,
-    ecm.PsseMatchScore   = 2,
+    ecm.PsseMatchScore   = CASE WHEN rs.MatchPriority = 0 THEN 2 ELSE 1 END,
     ecm.UpdatedOn        = sysdatetime(),
     ecm.UpdatedBy        = suser_sname()
 FROM dic.EntityColumnMap ecm
@@ -896,11 +1005,23 @@ TRUNCATE TABLE stg.EntitySource_Draft;
         EntityName_EN,
         PsseSchemaName,
         PsseObjectName,
+        SUM(CASE MatchType
+                WHEN N'EXACT' THEN 100
+                WHEN N'HEURISTIC_UID' THEN 25
+                ELSE 0
+            END) AS WeightedMatchScore,
         COUNT(*) AS ColumnMatchCount
     FROM stg.ODataPsseExactColumnMatch
     WHERE RunId = @RunId
-      AND MatchType = N'EXACT'
+      AND MatchType IN (N'EXACT', N'HEURISTIC_UID')
     GROUP BY EntityName_EN, PsseSchemaName, PsseObjectName
+),
+source_hints AS
+(
+    SELECT N'Assignments' AS EntityName_EN, N'pjrep' AS PreferredSchema, N'MSP_EpmAssignment_UserView' AS PreferredObject UNION ALL
+    SELECT N'Projects',    N'pjrep', N'MSP_EpmProject_UserView' UNION ALL
+    SELECT N'Tasks',       N'pjrep', N'MSP_EpmTask_UserView' UNION ALL
+    SELECT N'Timesheets',  N'pjrep', N'MSP_Timesheet'
 ),
 entity_totals AS
 (
@@ -915,6 +1036,7 @@ ranked AS
         eos.EntityName_EN,
         eos.PsseSchemaName,
         eos.PsseObjectName,
+        eos.WeightedMatchScore,
         eos.ColumnMatchCount,
         et.TotalPrimitiveCols,
         CASE WHEN et.TotalPrimitiveCols > 0
@@ -924,10 +1046,17 @@ ranked AS
         ROW_NUMBER() OVER
         (
             PARTITION BY eos.EntityName_EN
-            ORDER BY eos.ColumnMatchCount DESC, eos.PsseObjectName
+            ORDER BY
+                CASE WHEN sh.PreferredSchema = eos.PsseSchemaName
+                       AND sh.PreferredObject = eos.PsseObjectName THEN 0 ELSE 1 END,
+                eos.WeightedMatchScore DESC,
+                eos.ColumnMatchCount DESC,
+                eos.PsseObjectName
         ) AS rn
     FROM entity_object_score eos
     JOIN entity_totals et ON et.EntityName_EN = eos.EntityName_EN
+    LEFT JOIN source_hints sh
+        ON sh.EntityName_EN = eos.EntityName_EN
 )
 INSERT INTO stg.EntitySource_Draft
 (
@@ -1070,6 +1199,7 @@ SELECT N'dic.LookupMap',                          @LookupMapCount              U
 SELECT N'cfg.dictionary_od_fields',               @OdFieldsNorm                UNION ALL
 SELECT N'cfg.dictionary_projectdata_alias',        @AliasNorm                   UNION ALL
 SELECT N'stg.ODataPsseExactColumnMatch (EXACT)',  @ExactCount                  UNION ALL
+SELECT N'stg.ODataPsseExactColumnMatch (HEURISTIC_UID)', @HeuristicCount        UNION ALL
 SELECT N'stg.ODataPsseExactColumnMatch (NOMATCH)', @NoMatchCount               UNION ALL
 SELECT N'stg.EntitySource_Draft (HIGH)',           @SourceHighCount             UNION ALL
 SELECT N'stg.DictionaryQualityIssue (WARN)',       @QualityWarnCount            UNION ALL

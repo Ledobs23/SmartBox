@@ -23,11 +23,13 @@
     Étapes post-publication (après MERGE dic.EntityColumnPublication)
     - ETAPE E2 : Match normalisé (champs custom sans espaces OData vs avec espaces PSSE)
     - ETAPE E3 : Correction jointures TypeName/TypeDescription (Resources j1, Assignments j3)
-    - ETAPE E4 : Jointures dérivées ProjectName/TaskName/ParentTaskName/ResourceName (Tasks, Assignments, ATD)
-                  Assignments jAssignApplied (AllUpdatesApplied/UpdatesAppliedDate)
-                  Projects jPTRI/jWFI/jWFOwner (ProjectTimephased, WorkflowCreatedDate/OwnerId/OwnerName)
-                  Projects cas spéciaux : EnterpriseProjectTypeIsDefault, ProjectWorkspaceInternalUrl
+    - ETAPE E4 : Jointures dérivées complètes (Tasks/Assignments/Projects/Timesheet/TimeSet)
+                  Group A : prefix OData stripping (BusinessDrivers, Engagements, Prioritizations, etc.)
+                  Group B : TimesheetLines jTSLine/jTSLineAppr/jTSClass + renames src
+                  Group C : TimesheetLineActualDataSet jLastChanged
+                  Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
+                  Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -1098,11 +1100,208 @@ WHERE EntityName_EN = N'Projects'
   AND Column_EN     = N'ProjectWorkspaceInternalUrl'
   AND MapStatus    <> N'MANUAL';
 
+/* --- E4 suite : jointures supplémentaires (TimeSet, TimesheetLines, TimesheetLineActualDataSet) --- */
+MERGE dic.EntityJoin AS T
+USING
+(
+    VALUES
+        /* TimeSet : FiscalPeriodModifiedDate via FiscalPeriodUID (j1 auto-détecté utilise SiteId — incorrect) */
+        (N'TimeSet', N'jFP', N'pjrep', N'MSP_FiscalPeriods_ODATAView', N'src_pjrep',
+         N'jFP', N'LEFT', N'jFP.FiscalPeriodUID = src.FiscalPeriodUID', 1, N'MANUAL'),
+        /* TimesheetLines : MSP_TimesheetLine (non-UserView) via TimesheetLineUID pour Comment + ApproverUID */
+        (N'TimesheetLines', N'jTSLine', N'pjrep', N'MSP_TimesheetLine', N'src_pjrep',
+         N'jTSLine', N'LEFT', N'jTSLine.TimesheetLineUID = src.TimesheetLineUID', 1, N'MANUAL'),
+        /* TimesheetLines : approuveur — jointure imbriquée (jTSLineAppr < jTSLine alphabétiquement)  */
+        /* IMPORTANT : jTSLine doit précéder jTSLineAppr dans la clause FROM.                        */
+        /* L'ordre alphabétique de STRING_AGG garantit jTSLine avant jTSLineAppr. ✓                 */
+        (N'TimesheetLines', N'jTSLineAppr', N'pjrep', N'MSP_EpmResource_UserView', N'src_pjrep',
+         N'jTSLineAppr', N'LEFT', N'jTSLineAppr.ResourceUID = jTSLine.ApproverResourceNameUID', 1, N'MANUAL'),
+        /* TimesheetLines : classe feuille de temps (description) */
+        (N'TimesheetLines', N'jTSClass', N'pjrep', N'MSP_TimesheetClass_UserView', N'src_pjrep',
+         N'jTSClass', N'LEFT', N'jTSClass.ClassUID = src.TimesheetLineClassUID', 1, N'MANUAL'),
+        /* TimesheetLineActualDataSet : dernière ressource modificatrice */
+        (N'TimesheetLineActualDataSet', N'jLastChanged', N'pjrep', N'MSP_EpmResource_UserView', N'src_pjrep',
+         N'jLastChanged', N'LEFT', N'jLastChanged.ResourceUID = src.LastChangedResourceNameUID', 1, N'MANUAL')
+) AS S (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+        JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  T.EntityName_EN = S.EntityName_EN
+AND T.JoinTag       = S.JoinTag
+WHEN MATCHED AND T.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET T.PsseSchemaName=S.PsseSchemaName, T.PsseObjectName=S.PsseObjectName,
+               T.SmartBoxSchemaName=S.SmartBoxSchemaName, T.JoinAlias=S.JoinAlias,
+               T.JoinType=S.JoinType, T.JoinExpression=S.JoinExpression,
+               T.IsActive=S.IsActive, T.JoinStatus=S.JoinStatus,
+               T.UpdatedOn=sysdatetime(), T.UpdatedBy=suser_sname()
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (S.EntityName_EN, S.JoinTag, S.PsseSchemaName, S.PsseObjectName, S.SmartBoxSchemaName,
+            S.JoinAlias, S.JoinType, S.JoinExpression, S.IsActive, S.JoinStatus);
+
+/* --- E4 : Group A — Colonnes dont OData ajoute un préfixe d'entité absent dans PSSE (src primaire) --- */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = CASE Column_EN
+        WHEN N'BusinessDriverCreatedDate'   THEN N'CreatedDate'
+        WHEN N'BusinessDriverModifiedDate'  THEN N'ModifiedDate'
+        WHEN N'EngagementCreatedDate'       THEN N'CreatedDate'
+        WHEN N'EngagementReviewedDate'      THEN N'ReviewedDate'
+        WHEN N'EngagementStatus'            THEN N'Status'
+        WHEN N'EngagementSubmittedDate'     THEN N'SubmittedDate'
+        WHEN N'CommentCreatedDate'          THEN N'CreatedDate'
+        WHEN N'FiscalPeriodModifiedDate'    THEN N'ModifiedDate'
+        WHEN N'PrioritizationCreatedDate'   THEN N'CreatedDate'
+        WHEN N'PrioritizationModifiedDate'  THEN N'ModifiedDate'
+        WHEN N'StageLastSubmittedDate'      THEN N'StageLastSubmitted'
+        WHEN N'TimesheetClassName'          THEN N'ClassName'
+        WHEN N'TimesheetClassType'          THEN N'Type'
+    END,
+    SourceAlias      = N'src',
+    SourceExpression = N'src.' + QUOTENAME(CASE Column_EN
+        WHEN N'BusinessDriverCreatedDate'   THEN N'CreatedDate'
+        WHEN N'BusinessDriverModifiedDate'  THEN N'ModifiedDate'
+        WHEN N'EngagementCreatedDate'       THEN N'CreatedDate'
+        WHEN N'EngagementReviewedDate'      THEN N'ReviewedDate'
+        WHEN N'EngagementStatus'            THEN N'Status'
+        WHEN N'EngagementSubmittedDate'     THEN N'SubmittedDate'
+        WHEN N'CommentCreatedDate'          THEN N'CreatedDate'
+        WHEN N'FiscalPeriodModifiedDate'    THEN N'ModifiedDate'
+        WHEN N'PrioritizationCreatedDate'   THEN N'CreatedDate'
+        WHEN N'PrioritizationModifiedDate'  THEN N'ModifiedDate'
+        WHEN N'StageLastSubmittedDate'      THEN N'StageLastSubmitted'
+        WHEN N'TimesheetClassName'          THEN N'ClassName'
+        WHEN N'TimesheetClassType'          THEN N'Type'
+    END),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN IN (N'BusinessDrivers', N'Engagements', N'EngagementsComments',
+                        N'FiscalPeriods', N'Prioritizations', N'ProjectWorkflowStageDataSet',
+                        N'TimesheetClasses')
+  AND Column_EN IN (N'BusinessDriverCreatedDate', N'BusinessDriverModifiedDate',
+                    N'EngagementCreatedDate', N'EngagementReviewedDate',
+                    N'EngagementStatus', N'EngagementSubmittedDate',
+                    N'CommentCreatedDate', N'FiscalPeriodModifiedDate',
+                    N'PrioritizationCreatedDate', N'PrioritizationModifiedDate',
+                    N'StageLastSubmittedDate', N'TimesheetClassName', N'TimesheetClassType')
+  AND MapStatus <> N'MANUAL';
+
+/* TimeSet.FiscalPeriodModifiedDate : via jFP (FiscalPeriodUID, pas SiteId) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'ModifiedDate',
+    SourceAlias      = N'jFP',
+    SourceExpression = N'jFP.[ModifiedDate]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimeSet'
+  AND Column_EN     = N'FiscalPeriodModifiedDate'
+  AND MapStatus    <> N'MANUAL';
+
+/* --- E4 : Group B — TimesheetLines : renames source primaire + nouvelles jointures --- */
+/* Colonnes dans src (MSP_TimesheetLine_UserView) avec nom PSSE différent d'OData */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = CASE Column_EN
+        WHEN N'TimesheetClassName'     THEN N'TimesheetLineClass'
+        WHEN N'TimesheetClassType'     THEN N'TimesheetLineClassType'
+        WHEN N'TimesheetPeriodId'      THEN N'PeriodUID'
+        WHEN N'TimesheetPeriodName'    THEN N'PeriodName'
+        WHEN N'TimesheetPeriodStatus'  THEN N'PeriodStatus'
+        WHEN N'TimesheetPeriodStatusId'THEN N'PeriodStatusID'
+    END,
+    SourceAlias      = N'src',
+    SourceExpression = N'src.' + QUOTENAME(CASE Column_EN
+        WHEN N'TimesheetClassName'     THEN N'TimesheetLineClass'
+        WHEN N'TimesheetClassType'     THEN N'TimesheetLineClassType'
+        WHEN N'TimesheetPeriodId'      THEN N'PeriodUID'
+        WHEN N'TimesheetPeriodName'    THEN N'PeriodName'
+        WHEN N'TimesheetPeriodStatus'  THEN N'PeriodStatus'
+        WHEN N'TimesheetPeriodStatusId'THEN N'PeriodStatusID'
+    END),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLines'
+  AND Column_EN IN (N'TimesheetClassName', N'TimesheetClassType',
+                    N'TimesheetPeriodId', N'TimesheetPeriodName',
+                    N'TimesheetPeriodStatus', N'TimesheetPeriodStatusId')
+  AND MapStatus <> N'MANUAL';
+
+/* TimesheetLines : colonnes depuis jTSLine (MSP_TimesheetLine non-UserView) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = CASE Column_EN
+        WHEN N'TimesheetApproverResourceId'  THEN N'ApproverResourceNameUID'
+        WHEN N'TimesheetLineComment'          THEN N'Comment'
+    END,
+    SourceAlias      = N'jTSLine',
+    SourceExpression = N'jTSLine.' + QUOTENAME(CASE Column_EN
+        WHEN N'TimesheetApproverResourceId'  THEN N'ApproverResourceNameUID'
+        WHEN N'TimesheetLineComment'          THEN N'Comment'
+    END),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLines'
+  AND Column_EN IN (N'TimesheetApproverResourceId', N'TimesheetLineComment')
+  AND MapStatus <> N'MANUAL';
+
+/* TimesheetLines : ApproverResourceName depuis jTSLineAppr (jointure imbriquée) */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmResource_UserView',
+    PsseColumnName   = N'ResourceName',
+    SourceAlias      = N'jTSLineAppr',
+    SourceExpression = N'jTSLineAppr.[ResourceName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLines'
+  AND Column_EN     = N'TimesheetApproverResourceName'
+  AND MapStatus    <> N'MANUAL';
+
+/* TimesheetLines : ClassDescription depuis jTSClass */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_TimesheetClass_UserView',
+    PsseColumnName   = N'Description',
+    SourceAlias      = N'jTSClass',
+    SourceExpression = N'jTSClass.[Description]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLines'
+  AND Column_EN     = N'TimesheetClassDescription'
+  AND MapStatus    <> N'MANUAL';
+
+/* --- E4 : Group C — TimesheetLineActualDataSet : LastChangedResourceName via jLastChanged --- */
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_EpmResource_UserView',
+    PsseColumnName   = N'ResourceName',
+    SourceAlias      = N'jLastChanged',
+    SourceExpression = N'jLastChanged.[ResourceName]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLineActualDataSet'
+  AND Column_EN     = N'LastChangedResourceName'
+  AND MapStatus    <> N'MANUAL';
+
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = CONCAT(N'ETAPE E4 : jointures dérivées insérées (jProject/jTask/jParent/jResource/jAssignApplied/jPTRI/jWFI/jWFOwner). ',
-    N'Colonnes activées : ProjectName, TaskName, ParentTaskName, ResourceName (Assignments), ',
-    N'AllUpdatesApplied, ProjectTimephased, WorkflowCreatedDate, WorkflowOwnerId, WorkflowOwnerName, ',
-    N'EnterpriseProjectTypeIsDefault, ProjectWorkspaceInternalUrl.');
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C résolus : prefix OData stripping, TimesheetLines (jTSLine/jTSLineAppr/jTSClass), TimesheetLineActualDataSet (jLastChanged), TimeSet (jFP).';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',
@@ -1126,7 +1325,7 @@ SET JoinExpression = N'/* TODO: SITEID_CROSS - remplacer par la vraie clé de jo
     JoinStatus     = N'MANUAL_REQUIRED',
     UpdatedOn      = sysdatetime(),
     UpdatedBy      = suser_sname()
-WHERE JoinExpression LIKE N'%.[SiteId] = src.[SiteId]%'
+WHERE JoinExpression LIKE N'%.[[]SiteId] = src.[[]SiteId]%'  /* [[] échappe [ dans SQL Server LIKE */
   AND JoinStatus  <> N'MANUAL';
 
 SET @SiteIdCrossCount = @@ROWCOUNT;

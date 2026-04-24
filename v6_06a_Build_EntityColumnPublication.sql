@@ -38,6 +38,8 @@
                   Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
                   Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
+    - ETAPE E6 : Sync retour dic.EntityColumnMap ← dic.EntityColumnPublication
+                  RESOLVED_V06A | CONFIRMED_UNMAPPED | NAVIGATION
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -1716,6 +1718,86 @@ SELECT
     @UnmappedCount        = SUM(CASE WHEN MapStatus = N'UNMAPPED'          THEN 1 ELSE 0 END),
     @NavigationCount      = SUM(CASE WHEN MapStatus = N'NAVIGATION'        THEN 1 ELSE 0 END)
 FROM dic.EntityColumnPublication;
+
+/* ===========================================================================================
+   ETAPE E6 : Synchronisation dic.EntityColumnMap ← dic.EntityColumnPublication
+   Écrit dans EntityColumnMap les résolutions effectuées par les étapes E2→E5.
+   EntityColumnMap devient ainsi une documentation fidèle de l'état final.
+
+   ColumnMatchStatus après sync :
+     RESOLVED_V06A      = résolu par v6_06a (E2 normalisé, E3 correction, E4 jointure explicite)
+     CONFIRMED_UNMAPPED = confirmé sans source PSSE identifiable (CAST NULL dans les vues)
+     NAVIGATION         = lien navigationnel OData — pas une colonne de données
+     MANUAL             = override manuel, jamais touché automatiquement
+   =========================================================================================== */
+DECLARE @SyncResolvedCount  int = 0;
+DECLARE @SyncUnmappedCount  int = 0;
+DECLARE @SyncNavCount       int = 0;
+
+/* Sync 1 : Colonnes résolues dans ECP mais encore NULL dans ECM */
+UPDATE ecm
+SET ecm.PsseSourceSchema  = COALESCE(eb.PsseSchemaName, ej.PsseSchemaName),
+    ecm.PsseSourceObject  = COALESCE(eb.PsseObjectName, ej.PsseObjectName),
+    ecm.PsseColumnName    = ecp.PsseColumnName,
+    ecm.PsseMatchScore    = 100,
+    ecm.ColumnMatchStatus = N'RESOLVED_V06A',
+    ecm.UpdatedOn         = sysdatetime(),
+    ecm.UpdatedBy         = suser_sname()
+FROM dic.EntityColumnMap ecm
+JOIN dic.EntityColumnPublication ecp
+    ON  ecp.EntityName_EN = ecm.EntityName_EN
+    AND ecp.Column_EN     = ecm.Column_EN
+LEFT JOIN dic.EntityBinding eb
+    ON  eb.EntityName_EN = ecp.EntityName_EN
+    AND ecp.SourceAlias  = N'src'
+LEFT JOIN dic.EntityJoin ej
+    ON  ej.EntityName_EN = ecp.EntityName_EN
+    AND ej.JoinAlias     = ecp.SourceAlias
+    AND ecp.SourceAlias <> N'src'
+WHERE ecm.PsseColumnName   IS NULL
+  AND ecp.MapStatus         = N'MAPPED'
+  AND ecp.PsseColumnName    IS NOT NULL
+  AND ecm.ColumnMatchStatus <> N'MANUAL';
+
+SET @SyncResolvedCount = @@ROWCOUNT;
+
+/* Sync 2 : Colonnes confirmées UNMAPPED (CAST NULL dans les vues) */
+UPDATE ecm
+SET ecm.ColumnMatchStatus = N'CONFIRMED_UNMAPPED',
+    ecm.UpdatedOn         = sysdatetime(),
+    ecm.UpdatedBy         = suser_sname()
+FROM dic.EntityColumnMap ecm
+JOIN dic.EntityColumnPublication ecp
+    ON  ecp.EntityName_EN = ecm.EntityName_EN
+    AND ecp.Column_EN     = ecm.Column_EN
+WHERE ecp.MapStatus        = N'UNMAPPED'
+  AND ecm.ColumnMatchStatus NOT IN (N'MANUAL', N'CONFIRMED_UNMAPPED');
+
+SET @SyncUnmappedCount = @@ROWCOUNT;
+
+/* Sync 3 : Colonnes NAVIGATION (liens OData, absentes des vues de données) */
+UPDATE ecm
+SET ecm.ColumnMatchStatus = N'NAVIGATION',
+    ecm.UpdatedOn         = sysdatetime(),
+    ecm.UpdatedBy         = suser_sname()
+FROM dic.EntityColumnMap ecm
+JOIN dic.EntityColumnPublication ecp
+    ON  ecp.EntityName_EN = ecm.EntityName_EN
+    AND ecp.Column_EN     = ecm.Column_EN
+WHERE ecp.MapStatus        = N'NAVIGATION'
+  AND ecm.ColumnMatchStatus NOT IN (N'MANUAL', N'NAVIGATION');
+
+SET @SyncNavCount = @@ROWCOUNT;
+
+SET @Msg = CONCAT(
+    N'ETAPE E6 : sync EntityColumnMap terminé. RESOLVED_V06A=', @SyncResolvedCount,
+    N'; CONFIRMED_UNMAPPED=', @SyncUnmappedCount,
+    N'; NAVIGATION=', @SyncNavCount, N'.'
+);
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'SYNC_ECM', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@SyncResolvedCount;
 
 /* ===========================================================================================
    ETAPE F : Journal de construction (stg.EntityDraftBuildLog)

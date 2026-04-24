@@ -35,6 +35,7 @@
                   Phase L  : EngagementsTimephasedDataSet renommages OData/PSSE (src direct)
                   Phase M  : Engagements EngagementModifiedDate → src.ModifiedDate
                   Phase N  : ResourceTimephasedDataSet/ResourceDemandTimephasedDataSet jTBD (MSP_TimeByDay → FiscalPeriodId) + ResourceModifiedDate via jResource
+                  Phase O  : Projects jPD (MSP_EpmProjectDecision_UserView) → OptimizerDecisionAliasLookupTableValueId, PlannerDecisionAliasLookupTableValueId
                   Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
                   Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
@@ -1655,8 +1656,53 @@ WHERE EntityName_EN = N'ResourceTimephasedDataSet'
   AND Column_EN     = N'ResourceModifiedDate'
   AND MapStatus    <> N'MANUAL';
 
+/* --- E4 : Phase O – Projects OptimizerDecision + PlannerDecision via jPD ---
+   MSP_EpmProjectDecision_UserView (pjrep) expose les décisions d'analyse de portefeuille.
+   FK : ProjectUID. Synonyme src_pjrep.MSP_EpmProjectDecision_UserView disponible.
+   OData : OptimizerDecisionAliasLookupTableValueId = jPD.OptimizerDecisionAliasMemberUID
+           PlannerDecisionAliasLookupTableValueId   = jPD.PlannerDecisionAliasMemberUID
+   Note : table vide si aucune analyse de portefeuille n'a été exécutée (comportement normal).
+*/
+MERGE dic.EntityJoin AS tgt
+USING (VALUES
+    (N'Projects', N'jPD', N'pjrep', N'MSP_EpmProjectDecision_UserView', N'src_pjrep',
+     N'jPD', N'LEFT', N'jPD.ProjectUID = src.ProjectUID', 1, N'MANUAL')
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = CASE Column_EN
+        WHEN N'OptimizerDecisionAliasLookupTableValueId' THEN N'OptimizerDecisionAliasMemberUID'
+        WHEN N'PlannerDecisionAliasLookupTableValueId'   THEN N'PlannerDecisionAliasMemberUID'
+    END,
+    SourceAlias      = N'jPD',
+    SourceExpression = N'jPD.' + QUOTENAME(CASE Column_EN
+        WHEN N'OptimizerDecisionAliasLookupTableValueId' THEN N'OptimizerDecisionAliasMemberUID'
+        WHEN N'PlannerDecisionAliasLookupTableValueId'   THEN N'PlannerDecisionAliasMemberUID'
+    END),
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Projects'
+  AND Column_EN IN (N'OptimizerDecisionAliasLookupTableValueId',
+                   N'PlannerDecisionAliasLookupTableValueId')
+  AND MapStatus    <> N'MANUAL';
+
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N résolus.';
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N/O résolus.';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',

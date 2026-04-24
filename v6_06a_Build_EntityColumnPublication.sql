@@ -1711,6 +1711,36 @@ EXEC log.usp_WriteScriptLog
     @Phase=N'SITEID_CROSS', @Severity=N'WARNING', @Status=N'WARNING',
     @Message=@Msg, @RowsAffected=@SiteIdCrossCount;
 
+/* E5 – Cleanup : désactivation des joins MANUAL_REQUIRED sans référence colonne
+   Ces joins auto-détectés (ETAPE E1) sont orphelins : aucune colonne publiée ne les utilise.
+   Ils sont remplacés par des joins nommés explicitement (jProject, jTask, jTP, jTST,
+   jWFI, jFP, jResource, jTBD, etc.) ajoutés en ETAPE E4 Phases G-N.
+   MANUAL + IsActive=0 = protégé contre re-détection, exclu des vues et des warnings. */
+DECLARE @OrphanDeactivatedCount int = 0;
+
+UPDATE dic.EntityJoin
+SET JoinStatus     = N'MANUAL',
+    IsActive       = 0,
+    JoinExpression = N'/* DEACTIVATED: join auto-détecté orphelin — remplacé par un join nommé explicite en ETAPE E4 */',
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE JoinStatus = N'MANUAL_REQUIRED'
+  AND NOT EXISTS (
+      SELECT 1 FROM dic.EntityColumnPublication ecp
+      WHERE ecp.EntityName_EN = dic.EntityJoin.EntityName_EN
+        AND ecp.SourceAlias   = dic.EntityJoin.JoinAlias
+  );
+
+SET @OrphanDeactivatedCount = @@ROWCOUNT;
+
+SET @Msg = CONCAT(N'ETAPE E5 cleanup : ', @OrphanDeactivatedCount,
+    N' join(s) MANUAL_REQUIRED orphelin(s) désactivé(s) (IsActive=0, MANUAL).',
+    N' Aucune colonne publiée ne les référençait.');
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'ORPHAN_DEACTIVATE', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@OrphanDeactivatedCount;
+
 /* Recompte après corrections E2-E5 */
 SELECT
     @MappedCount          = SUM(CASE WHEN MapStatus = N'MAPPED'            THEN 1 ELSE 0 END),

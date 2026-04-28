@@ -17,3 +17,6 @@ desktop.ini
 *.tmp
 *.bak
 ~$*
+
+# Local view backup snapshots (générés par v6_07a en mode DEBUG)
+BACKUP_Views_*.sql

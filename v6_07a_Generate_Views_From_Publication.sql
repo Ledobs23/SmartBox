@@ -192,7 +192,12 @@ BEGIN
     /* Construire la clause FROM */
     SET @FromClause = QUOTENAME(@SmartBoxSchema) + N'.' + QUOTENAME(@PsseObject) + N' AS ' + QUOTENAME(@BindingAlias);
 
-    /* Construire les clauses JOIN depuis dic.EntityJoin */
+    /* Construire les clauses JOIN depuis dic.EntityJoin.
+       Inclure un join si :
+         a) au moins une colonne ECP l'utilise directement (SourceAlias = JoinAlias), OU
+         b) il est déclaré comme prérequis d'un autre join inclus via JoinDependsOn
+            (joins intermédiaires : ex. jITT requis par jITT_LTV qui a JoinDependsOn='jITT').
+       Tri par EntityJoinId (ordre d'insertion) pour respecter les dépendances déclarées. */
     SELECT @JoinClauses = STRING_AGG(
         CONVERT(nvarchar(max),
             CONCAT(
@@ -204,19 +209,36 @@ BEGIN
         ),
         N'
     '
-    ) WITHIN GROUP (ORDER BY ej.JoinTag)
+    ) WITHIN GROUP (ORDER BY ej.EntityJoinId)
     FROM dic.EntityJoin ej
     WHERE ej.EntityName_EN = @EntityName_EN
       AND ej.IsActive = 1
+      AND ej.JoinExpression NOT LIKE N'/* DEACTIVATED%'
       AND ej.JoinExpression NOT LIKE N'/* TODO%'
-      AND EXISTS
-      (
-          SELECT 1
-          FROM dic.EntityColumnPublication ecp
-          WHERE ecp.EntityName_EN = @EntityName_EN
-            AND ecp.IsPublished = 1
-            AND ecp.SourceAlias = ej.JoinAlias
-            AND ecp.MapStatus IN (N'MAPPED', N'MAPPED_NEEDS_JOIN')
+      AND (
+          /* a) Référencé directement par une colonne ECP */
+          EXISTS (
+              SELECT 1 FROM dic.EntityColumnPublication ecp
+              WHERE ecp.EntityName_EN = @EntityName_EN
+                AND ecp.IsPublished   = 1
+                AND ecp.SourceAlias   = ej.JoinAlias
+                AND ecp.MapStatus    IN (N'MAPPED', N'MAPPED_NEEDS_JOIN')
+          )
+          OR
+          /* b) Join intermédiaire : un autre join inclus déclare JoinDependsOn = cet alias */
+          EXISTS (
+              SELECT 1 FROM dic.EntityJoin ej2
+              WHERE ej2.EntityName_EN = @EntityName_EN
+                AND ej2.IsActive      = 1
+                AND ej2.JoinDependsOn = ej.JoinAlias
+                AND EXISTS (
+                    SELECT 1 FROM dic.EntityColumnPublication ecp2
+                    WHERE ecp2.EntityName_EN = @EntityName_EN
+                      AND ecp2.IsPublished   = 1
+                      AND ecp2.SourceAlias   = ej2.JoinAlias
+                      AND ecp2.MapStatus    IN (N'MAPPED', N'MAPPED_NEEDS_JOIN')
+                )
+          )
       );
 
     /* Construire la liste de colonnes EN */
@@ -233,7 +255,7 @@ BEGIN
         ),
         N',
     '
-    ) WITHIN GROUP (ORDER BY ecp.ColumnPosition)
+    ) WITHIN GROUP (ORDER BY ISNULL(ecp.ColumnPosition, 9999), ecp.Column_EN)
     FROM dic.EntityColumnPublication ecp
     WHERE ecp.EntityName_EN = @EntityName_EN
       AND ecp.IsPublished = 1;
@@ -252,7 +274,7 @@ BEGIN
         ),
         N',
     '
-    ) WITHIN GROUP (ORDER BY ecp.ColumnPosition)
+    ) WITHIN GROUP (ORDER BY ISNULL(ecp.ColumnPosition, 9999), ecp.Column_EN)
     FROM dic.EntityColumnPublication ecp
     WHERE ecp.EntityName_EN = @EntityName_EN
       AND ecp.IsPublished = 1;
@@ -408,6 +430,39 @@ FROM ', @FromClause,
             SET @ViewCreated += 1;
             INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
             VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx_fr FR générée.');
+        END TRY
+        BEGIN CATCH
+            SET @ErrMsg = ERROR_MESSAGE();
+            SET @ErrNum = ERROR_NUMBER();
+            SET @ViewFailed += 1;
+            INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
+            VALUES (@RunId, @ViewSchema, @ViewName, N'ERROR', CONCAT(N'Erreur ', @ErrNum, N': ', @ErrMsg));
+        END CATCH;
+    END;
+
+    /* ---------------------------------------------------------------------------------
+       Générer tbx_master.<vw_EntityName_EN_Master> = SELECT * FROM tbx.vw_EntityName_EN
+       Couche de consolidation qui abstrait tbx pour les outils aval.
+       --------------------------------------------------------------------------------- */
+    IF @GenTbx = 1
+    BEGIN
+        SET @ViewSchema = N'tbx_master';
+        SET @ViewName   = CONCAT(N'vw_', @EntityName_EN, N'_Master');
+
+        SET @ViewSql = CONCAT(
+            N'CREATE OR ALTER VIEW ', QUOTENAME(@ViewSchema), N'.', QUOTENAME(@ViewName), N' AS',
+            N'
+/* SmartBox V6 - tbx_master consolidation - Generated from dic.EntityColumnPublication */',
+            N'
+SELECT *
+FROM [tbx].', QUOTENAME(CONCAT(N'vw_', @EntityName_EN)), N';'
+        );
+
+        BEGIN TRY
+            EXEC sys.sp_executesql @ViewSql;
+            SET @ViewCreated += 1;
+            INSERT INTO report.ViewStackValidation (RunId, ViewSchema, ViewName, ValidationStatus, Message)
+            VALUES (@RunId, @ViewSchema, @ViewName, N'CREATED', N'Vue tbx_master générée.');
         END TRY
         BEGIN CATCH
             SET @ErrMsg = ERROR_MESSAGE();

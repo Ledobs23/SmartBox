@@ -12,12 +12,14 @@
 
 SmartBox V6 reconstruit les endpoints OData de Project Online directement depuis une base SQL Server PSSE, sans dépendance à SharePoint ni à xp_cmdshell. Le résultat est un ensemble de vues SQL (`ProjectData.*`, `tbx.*`, `tbx_fr.*`) interrogeables par n'importe quel client OData ou Power BI.
 
-Le pipeline se divise en deux volets :
+Le pipeline se divise en quatre volets :
 
 | Volet | Scripts | Exécuté dans |
 |---|---|---|
-| Infrastructure PSSE | v6_01a → v6_04a | VS Code (extension mssql) |
-| Dictionnaire et publication | Load-DictionaryCSV.ps1 + v6_05a → v6_07a | PowerShell (poste DBA) + VS Code |
+| Migration de Project Online vers PSSE | Prérequis à l'exécution des scripts | FluentBook et maintient des UID |
+| Extractions du schéma OData | Consignation des csv d'alias et de schéma | Utilisation iD-ODataSmartBoxGenerator |
+| Infrastructure PSSE vers BDI | exécution des scripts v6_01a → v6_04a | SSMS |
+| Dictionnaire et publication | Load-DictionaryCSV.ps1 + v6_05a → v6_07a | PowerShell + SSMS |
 
 ---
 
@@ -26,12 +28,11 @@ Le pipeline se divise en deux volets :
 ### Prérequis SQL Server
 
 - SQL Server 2019+ (niveau de compatibilité ≥ 140)
-- La base `SPR` existe déjà (vide ou partiellement déployée)
+- La base `SPR` existe déjà en collation Latin1_General_CI_AS_KS_WS (vide ou partiellement déployée)
 - Le compte exécutant les scripts est membre du rôle `db_owner` sur `SPR`
-- Accès en lecture sur `SP_SPR_POC_Contenu` (synonymes src_*)
-- Extension **mssql** installée dans VS Code
+- Accès en lecture sur la BD de `Contenu` de PSSE (création des synonymes src_*)
 
-**Vérifier la compatibilité et les permissions depuis SSMS ou VS Code :**
+**Vérifier la compatibilité et les permissions depuis SSMS :**
 
 ```sql
 -- Niveau de compatibilité (doit être >= 140)
@@ -115,7 +116,7 @@ $csvPath = "C:\Users\franbreton\Downloads\SPR SmartBox"
 ### Étape 0 — Diagnostic (optionnel, recommandé au premier déploiement)
 
 **Script :** `v6_01a_Prereq_Diagnostic.sql`  
-**Exécuter dans :** VS Code → base `SPR`
+**Exécuter dans :** SSMS → base `SPR`
 
 Effectue une série de vérifications en lecture seule sans modifier la base :
 
@@ -131,7 +132,7 @@ Produit un rapport console. Aucun effet de bord.
 ### Étape 1 — Rattachement et configuration
 
 **Script :** `v6_02a_Attach_Existing_SmartBox_Database.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (MERGE sur cfg.Settings)
 
 Crée la structure de configuration minimale V6 dans la base existante :
@@ -149,7 +150,7 @@ Crée la structure de configuration minimale V6 dans la base existante :
 ### Étape 2 — Fondations et inventaire PSSE
 
 **Script :** `v6_03a_Create_Foundations.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (DELETE par PwaId + MERGE + DROP/CREATE synonymes)
 
 Crée l'ensemble des tables de staging et effectue l'inventaire physique de la base PSSE :
@@ -189,7 +190,7 @@ ORDER BY Schema_;
 ### Étape 3 — Vues natives ProjectData
 
 **Script :** `v6_04a_Create_Native_ProjectData_Views.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (DROP VIEW IF EXISTS + CREATE VIEW)
 
 Crée les vues internes depuis un snapshot figé des définitions PSSE :
@@ -275,7 +276,7 @@ Chargement termine. Total lignes inserees : 4290
 Prochaine etape : executer v6_05a_Load_Dictionary_From_LoadTables.sql dans SSMS.
 ```
 
-#### Validation post-chargement (depuis VS Code ou SSMS)
+#### Validation post-chargement (depuis SSMS ou SSMS)
 
 ```sql
 -- Vérifier que les 3 tables sont peuplées
@@ -317,7 +318,7 @@ Ou passer les paramètres directement en ligne de commande :
 ### Étape 5 — Construction du dictionnaire canonique
 
 **Script :** `v6_05a_Load_Dictionary_From_LoadTables.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (MERGE + TRUNCATE des tables stg de travail)
 
 Transforme les données CSV brutes en tables structurées consommables :
@@ -361,7 +362,7 @@ ORDER BY IssueSeverity, IssueCode;
 ### Étape 6 — Publication des colonnes
 
 **Script :** `v6_06a_Build_EntityColumnPublication.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (MERGE avec protection des overrides manuels `BindingStatus/MapStatus = 'MANUAL'`)
 
 Construit la couche de publication canonique — source de vérité pour la génération de vues :
@@ -408,7 +409,7 @@ ORDER BY CoverageScore DESC;
 ### Étape 7 — Génération des vues finales
 
 **Script :** `v6_07a_Generate_Views_From_Publication.sql`  
-**Exécuter dans :** VS Code → base `SPR`  
+**Exécuter dans :** SSMS → base `SPR`  
 **Idempotent :** Oui (`CREATE OR ALTER VIEW`)
 
 Génère dynamiquement toutes les vues depuis `dic.EntityColumnPublication` :
@@ -447,7 +448,7 @@ SELECT TOP 5 * FROM ProjectData.Projects;  -- tenant EN
 Pour réinitialiser l'environnement sans supprimer la base ni les paramètres `cfg.Settings` :
 
 **Script :** `v6_00z_Reset_SmartBox_V6_Working_Tables.sql`  
-**Exécuter dans :** VS Code → base `SPR`
+**Exécuter dans :** SSMS → base `SPR`
 
 Le script supprime :
 - Toutes les vues générées (`ProjectData.*`, `tbx.*`, `tbx_fr.*`, `tbx_master.*`)
@@ -467,12 +468,12 @@ Après la remise à zéro, reprendre à l'**étape 1** si tu veux réappliquer l
 
 | Étape | Script / Commande | Outil | Durée estimée |
 |---|---|---|---|
-| 0 | `v6_01a_Prereq_Diagnostic.sql` | VS Code | < 1 min |
-| 1 | `v6_02a_Attach_Existing_SmartBox_Database.sql` | VS Code | < 1 min |
-| 2 | `v6_03a_Create_Foundations.sql` | VS Code | 1–3 min |
-| 3 | `v6_04a_Create_Native_ProjectData_Views.sql` | VS Code | 1–2 min |
+| 0 | `v6_01a_Prereq_Diagnostic.sql` | SSMS | < 1 min |
+| 1 | `v6_02a_Attach_Existing_SmartBox_Database.sql` | SSMS | < 1 min |
+| 2 | `v6_03a_Create_Foundations.sql` | SSMS | 1–3 min |
+| 3 | `v6_04a_Create_Native_ProjectData_Views.sql` | SSMS | 1–2 min |
 | 4 | `Load-DictionaryCSV.ps1` | PowerShell | < 1 min |
-| 5 | `v6_05a_Load_Dictionary_From_LoadTables.sql` | VS Code | < 1 min |
-| 6 | `v6_06a_Build_EntityColumnPublication.sql` | VS Code | < 1 min |
-| 7 | `v6_07a_Generate_Views_From_Publication.sql` | VS Code | < 1 min |
-| Reset | `v6_00z_Reset_SmartBox_V6_Working_Tables.sql` | VS Code | < 1 min |
+| 5 | `v6_05a_Load_Dictionary_From_LoadTables.sql` | SSMS | < 1 min |
+| 6 | `v6_06a_Build_EntityColumnPublication.sql` | SSMS | < 1 min |
+| 7 | `v6_07a_Generate_Views_From_Publication.sql` | SSMS | < 1 min |
+| Reset | `v6_00z_Reset_SmartBox_V6_Working_Tables.sql` | SSMS | < 1 min |

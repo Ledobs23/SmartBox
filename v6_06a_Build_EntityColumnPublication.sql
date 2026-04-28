@@ -37,10 +37,18 @@
                   Phase N  : ResourceTimephasedDataSet/ResourceDemandTimephasedDataSet jTBD (MSP_TimeByDay → FiscalPeriodId) + ResourceModifiedDate via jResource
                   Phase O  : Projects jPD (MSP_EpmProjectDecision_UserView) → OptimizerDecisionAliasLookupTableValueId, PlannerDecisionAliasLookupTableValueId
                   Projects jPTRI/jWFI/jWFOwner, Assignments jResource/jAssignApplied
+                  Phase P  : Tasks/Assignments IndicateurTypeTâche via pjpub jITT+jITT_LTV (MSP_TASK_CUSTOM_FIELDS_VIEW + MSP_LOOKUP_TABLE_VALUES)
+                             Cleanup : jPD migré → j1 (doublon), Assignments j2/j5 désactivés, TimesheetLines j4/Timesheets j4 désactivés
     - ETAPE E5 : Marquage jointures SiteId croisées (SITEID_CROSS -> MANUAL_REQUIRED)
                   Fix : [[] pour échapper les crochets dans LIKE (bug SQL Server)
     - ETAPE E6 : Sync retour dic.EntityColumnMap ← dic.EntityColumnPublication
                   RESOLVED_V06A | CONFIRMED_UNMAPPED | NAVIGATION
+    - ETAPE E7 : Résolution CFs client via MSP_CUSTOM_FIELDS (match normalisé, SourceAlias='src')
+                  Filtre MD_ENT_TYPE_UID par entité pour éviter les faux positifs cross-entité
+    - ETAPE E8 : Découverte automatique des CFs Lookup (MD_PROP_T=21) encore UNMAPPED après E7
+                  Génère les jointures pjpub jCF_<uid>→MSP_TASK_CUSTOM_FIELDS_VIEW
+                  + jCF_<uid>_L→MSP_LOOKUP_TABLE_VALUES pour chaque CF non résolu
+                  Portable : aucun nom de champ codé en dur
 =====================================================================================================================*/
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -90,10 +98,15 @@ BEGIN
         IsActive            bit           NOT NULL CONSTRAINT DF_dic_EntityJoin_IsActive  DEFAULT(1),
         UpdatedOn           datetime2(0)  NOT NULL CONSTRAINT DF_dic_EntityJoin_Upd       DEFAULT(sysdatetime()),
         UpdatedBy           sysname       NOT NULL CONSTRAINT DF_dic_EntityJoin_UpdBy     DEFAULT(suser_sname()),
+        JoinDependsOn       nvarchar(60)  NULL,  /* Alias d'un join devant précéder celui-ci (join intermédiaire) */
         CONSTRAINT PK_dic_EntityJoin PRIMARY KEY (EntityJoinId),
         CONSTRAINT UQ_dic_EntityJoin UNIQUE (EntityName_EN, JoinTag)
     );
 END;
+
+/* Ajout rétroactif de JoinDependsOn si la table existait avant cette version */
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dic.EntityJoin') AND name = N'JoinDependsOn')
+    ALTER TABLE dic.EntityJoin ADD JoinDependsOn nvarchar(60) NULL;
 
 IF OBJECT_ID(N'dic.EntityColumnPublication', N'U') IS NULL
 BEGIN
@@ -1701,8 +1714,205 @@ WHERE EntityName_EN = N'Projects'
                    N'PlannerDecisionAliasLookupTableValueId')
   AND MapStatus    <> N'MANUAL';
 
+/* =========================================================================================
+   E4 : Phase P – Correctifs manuels déclaratifs
+   Manifest des opérations (dans l'ordre d'exécution) :
+   ┌─────────────────────────────────────────────────────────────────────────────────────┐
+   │ Section A : Résolution dynamique des UIDs via MSP_CUSTOM_FIELDS (portable)         │
+   │ Section B : Ajout de jointures fonctionnelles manuelles                            │
+   │             ┌─ Tasks  jITT       → MSP_TASK_CUSTOM_FIELDS_VIEW  (valeur CF)       │
+   │             ├─ Tasks  jITT_LTV   → MSP_LOOKUP_TABLE_VALUES       (texte lookup)    │
+   │             ├─ Assign jITT_A     → MSP_TASK_CUSTOM_FIELDS_VIEW  (valeur CF)       │
+   │             └─ Assign jITT_LTV_A → MSP_LOOKUP_TABLE_VALUES       (texte lookup)    │
+   │ Section C : Mise à jour des colonnes publiées                                      │
+   │             ┌─ Tasks.IndicateurTypeTâche   → jITT_LTV.LT_VALUE_TEXT               │
+   │             ├─ Assign.IndicateurTypeTâche_T → jITT_LTV_A.LT_VALUE_TEXT            │
+   │             └─ TimesheetLines.LCID          → jTSClass.LCID                       │
+   │ Section D : Migration d'alias de jointure                                          │
+   │             └─ Projects jPD → j1  (doublon : même table, même clé)                │
+   │ Section E : Désactivation de jointures erronées auto-détectées                    │
+   │             ┌─ Projects jPD      (redondant, post-migration)                       │
+   │             ├─ Assignments j2    (cartésien via ProjectUID)                        │
+   │             ├─ Assignments j5    (doublons via TaskUID → TimesheetLine)            │
+   │             ├─ TimesheetLines j4 (0 col, orphelin)                                 │
+   │             └─ Timesheets j4     (faux-positif WssDeliverable)                    │
+   └─────────────────────────────────────────────────────────────────────────────────────┘
+   Source de vérité des champs personnalisés pjpub :
+     src_pjpub.MSP_TASK_CUSTOM_FIELDS_VIEW  : clés TASK_UID + MD_PROP_UID
+     src_pjpub.MSP_LOOKUP_TABLE_VALUES      : clé  LT_STRUCT_UID (= CODE_VALUE du CF)
+   MSP_ASSIGNMENT_CUSTOM_FIELDS_VIEW a 0 ligne pour ce CF → valeur via TASK_UID.
+   ========================================================================================= */
+
+/* ── Section A : Résolution dynamique des UIDs via MSP_CUSTOM_FIELDS ────────────────── */
+/* MD_PROP_UID varie par installation PSSE — résolution par nom normalisé (portable).
+   Ordre de priorité : 1) src_pjpub.MSP_CUSTOM_FIELDS (auto, lookup par nom),
+                       2) cfg.Settings SettingKey=CF_UID_IndicateurTypeTache (override manuel).
+   MD_ENT_TYPE_UID LIKE 'EBAD93E7%' = constante PSSE pour le type d'entité Tâche.
+   Si l'UID reste NULL → Sections B et C (jITT) ignorées + WARN dans stg.EntityDraftBuildLog. */
+DECLARE @CfUID_ITT     uniqueidentifier;
+DECLARE @CfUID_ITT_Str nvarchar(36);
+
+SELECT @CfUID_ITT = MIN(cf.MD_PROP_UID)
+FROM src_pjpub.MSP_CUSTOM_FIELDS cf
+WHERE LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cf.MD_PROP_NAME COLLATE DATABASE_DEFAULT,
+      N' ',N''),N'-',N''),N'(',N''),N')',N''))
+    = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(N'Indicateur type tâche' COLLATE DATABASE_DEFAULT,
+      N' ',N''),N'-',N''),N'(',N''),N')',N''))
+  AND cf.MD_ENT_TYPE_UID LIKE N'EBAD93E7%';
+
+/* Override cfg.Settings — priorité maximale (cas de nom ambigu ou remplacement manuel) */
+IF EXISTS (SELECT 1 FROM cfg.Settings WHERE SettingKey = N'CF_UID_IndicateurTypeTache' AND SettingValue IS NOT NULL)
+    SELECT @CfUID_ITT = TRY_CAST(SettingValue AS uniqueidentifier)
+    FROM cfg.Settings WHERE SettingKey = N'CF_UID_IndicateurTypeTache';
+
+IF @CfUID_ITT IS NULL
+    INSERT INTO stg.EntityDraftBuildLog (RunId, EntityName_EN, Phase, Severity, Message)
+    VALUES (@RunId, N'Tasks', N'E4-PhaseP-SectA', N'WARN',
+            N'CF "Indicateur type tâche" introuvable dans MSP_CUSTOM_FIELDS (MD_ENT_TYPE_UID LIKE EBAD93E7%) — jointures jITT/jITT_A ignorées.');
+ELSE
+    SET @CfUID_ITT_Str = LOWER(CONVERT(nvarchar(36), @CfUID_ITT));
+
+/* ── Sections B et C (colonnes dépendant de jITT) — conditionnelles sur résolution UID ── */
+IF @CfUID_ITT IS NOT NULL
+BEGIN
+
+/* ── Section B : Ajout de jointures fonctionnelles ──────────────────────────────────── */
+/* JoinExpression construite avec l'UID résolu en Section A — jamais de GUID codé en dur. */
+MERGE dic.EntityJoin AS tgt
+USING (
+    /* Tasks : jITT — filtre par MD_PROP_UID résolu (join intermédiaire, 0 col ECP directe) */
+    SELECT N'Tasks' AS EntityName_EN, N'jITT' AS JoinTag,
+           N'pjpub' AS PsseSchemaName, N'MSP_TASK_CUSTOM_FIELDS_VIEW' AS PsseObjectName,
+           N'src_pjpub' AS SmartBoxSchemaName, N'jITT' AS JoinAlias, N'LEFT' AS JoinType,
+           CONCAT(N'jITT.TASK_UID = src.TaskUID AND jITT.MD_PROP_UID = N''',
+                  @CfUID_ITT_Str, N'''') AS JoinExpression,
+           1 AS IsActive, N'MANUAL' AS JoinStatus
+    UNION ALL
+    /* Tasks : jITT_LTV — lookup texte (dépend de jITT, voir JoinDependsOn) */
+    SELECT N'Tasks', N'jITT_LTV', N'pjpub', N'MSP_LOOKUP_TABLE_VALUES', N'src_pjpub',
+           N'jITT_LTV', N'LEFT',
+           N'jITT_LTV.LT_STRUCT_UID = jITT.CODE_VALUE AND jITT_LTV.LCID = (SELECT TOP 1 CASE WHEN Language = N''FR'' THEN 1036 ELSE 1033 END FROM cfg.PWA)',
+           1, N'MANUAL'
+    UNION ALL
+    /* Assignments : jITT_A — même pattern via src.TaskUID (MSP_ASSIGNMENT_CUSTOM_FIELDS_VIEW vide pour ce CF) */
+    SELECT N'Assignments', N'jITT_A', N'pjpub', N'MSP_TASK_CUSTOM_FIELDS_VIEW', N'src_pjpub',
+           N'jITT_A', N'LEFT',
+           CONCAT(N'jITT_A.TASK_UID = src.TaskUID AND jITT_A.MD_PROP_UID = N''',
+                  @CfUID_ITT_Str, N''''),
+           1, N'MANUAL'
+    UNION ALL
+    /* Assignments : jITT_LTV_A — lookup texte (dépend de jITT_A, voir JoinDependsOn) */
+    SELECT N'Assignments', N'jITT_LTV_A', N'pjpub', N'MSP_LOOKUP_TABLE_VALUES', N'src_pjpub',
+           N'jITT_LTV_A', N'LEFT',
+           N'jITT_LTV_A.LT_STRUCT_UID = jITT_A.CODE_VALUE AND jITT_LTV_A.LCID = (SELECT TOP 1 CASE WHEN Language = N''FR'' THEN 1036 ELSE 1033 END FROM cfg.PWA)',
+           1, N'MANUAL'
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+/* Dépendances de jointure explicites (utilisé par v6_07a pour l'ordre FROM) */
+UPDATE dic.EntityJoin SET JoinDependsOn = N'jITT'
+WHERE EntityName_EN = N'Tasks'       AND JoinTag = N'jITT_LTV'   AND JoinDependsOn IS NULL;
+UPDATE dic.EntityJoin SET JoinDependsOn = N'jITT_A'
+WHERE EntityName_EN = N'Assignments' AND JoinTag = N'jITT_LTV_A' AND JoinDependsOn IS NULL;
+
+/* ── Section C (colonnes dépendant de jITT) : Mise à jour des colonnes publiées ─────── */
+/* Tasks.IndicateurTypeTâche → jITT_LTV.LT_VALUE_TEXT (texte du lookup PSSE) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'LT_VALUE_TEXT',
+    SourceAlias      = N'jITT_LTV',
+    SourceExpression = N'jITT_LTV.[LT_VALUE_TEXT]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Tasks'
+  AND Column_EN     = N'Indicateurtypetâche'
+  AND MapStatus    <> N'MANUAL';
+
+/* Assignments.IndicateurTypeTâche_T → jITT_LTV_A.LT_VALUE_TEXT (via TaskUID de l'affectation) */
+UPDATE dic.EntityColumnPublication
+SET PsseColumnName   = N'LT_VALUE_TEXT',
+    SourceAlias      = N'jITT_LTV_A',
+    SourceExpression = N'jITT_LTV_A.[LT_VALUE_TEXT]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Assignments'
+  AND Column_EN     = N'Indicateurtypetâche_T'
+  AND MapStatus    <> N'MANUAL';
+
+END; /* IF @CfUID_ITT IS NOT NULL */
+
+/* ── Section C (indépendant de jITT) : Mise à jour des colonnes publiées ─────────────── */
+
+/* TimesheetLines.LCID → jTSClass.LCID (MSP_TimesheetClass_UserView, join déjà actif) */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'jTSClass',
+    SourceExpression = N'jTSClass.[LCID]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetLines'
+  AND Column_EN     = N'LCID'
+  AND MapStatus    <> N'MANUAL';
+
+/* ── Section D : Migration d'alias de jointure ───────────────────────────────────────── */
+/* jPD → j1 : même table (MSP_EpmProjectDecision_UserView), même clé (ProjectUID)
+   j1 était auto-détecté (PROPOSED) avec 12 cols ; jPD avait 2 cols redondantes. */
+UPDATE dic.EntityColumnPublication
+SET SourceAlias      = N'j1',
+    SourceExpression = REPLACE(SourceExpression, N'jPD.', N'j1.'),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'Projects'
+  AND SourceAlias   = N'jPD'
+  AND MapStatus    <> N'MANUAL';
+
+/* ── Section E : Désactivation de jointures erronées ─────────────────────────────────── */
+/* jPD (Projects) : devenu orphelin après migration Section D */
+UPDATE dic.EntityJoin
+SET IsActive       = 0,
+    JoinExpression = N'/* DEACTIVATED Phase P Sect-E : redondant avec j1 (même table+clé) */',
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE EntityName_EN = N'Projects' AND JoinTag = N'jPD';
+
+/* 4 jointures PROPOSED à cardinalité incorrecte ou sans colonne publiée :
+   Assignments j2 : ProjectUID → AssignmentsApplied = cartésien (jAssignApplied correct via AssignmentUID)
+   Assignments j5 : TaskUID   → TimesheetLine       = doublons (1 task → N lignes)
+   TimesheetLines j4 : ResourceUID → MSP_EpmResource_UserView = 0 col, orphelin
+   Timesheets j4     : ProjectUID  → MSP_WssDeliverable        = faux-positif, hors-scope */
+UPDATE dic.EntityJoin
+SET IsActive       = 0,
+    JoinStatus     = N'MANUAL',
+    JoinExpression = CONCAT(N'/* DEACTIVATED Phase P Sect-E : ', JoinExpression, N' */'),
+    UpdatedOn      = sysdatetime(),
+    UpdatedBy      = suser_sname()
+WHERE JoinStatus <> N'MANUAL'
+  AND (  (EntityName_EN = N'Assignments'    AND JoinTag = N'j2')
+      OR (EntityName_EN = N'Assignments'    AND JoinTag = N'j5')
+      OR (EntityName_EN = N'TimesheetLines' AND JoinTag = N'j4')
+      OR (EntityName_EN = N'Timesheets'     AND JoinTag = N'j4')
+      );
+
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N/O résolus.';
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N/O/P résolus.';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',
@@ -1874,6 +2084,242 @@ EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'SYNC_ECM', @Severity=N'INFO', @Status=N'COMPLETED',
     @Message=@Msg, @RowsAffected=@SyncResolvedCount;
+
+/* ===========================================================================================
+   ETAPE E7 : Résolution champs personnalisés client via src_pjpub.MSP_CUSTOM_FIELDS
+   Pour les colonnes encore UNMAPPED dont Column_FR correspond (normalisé, espaces+tirets+parenthèses
+   retirés) à MD_PROP_NAME, ces champs sont exposés dans la UserView primaire (SourceAlias='src').
+   Filtre MD_ENT_TYPE_UID : évite les faux-positifs entre entités (ex. Projects≠Tasks).
+     - MD_ENT_TYPE_UID LIKE 'CECFE271%' = Projects (constante PSSE)
+     - MD_ENT_TYPE_UID LIKE 'EBAD93E7%' = Tasks / Issues / Risks / Scenarios (constante PSSE)
+     - MD_ENT_TYPE_UID LIKE 'C8C72436%' = Resources (constante PSSE)
+     - Entités sans entrée dans la table de mapping = aucune restriction (pass-through).
+   Mise à jour en cascade : dic.EntityColumnPublication → stg.ODataPsseExactColumnMatch → dic.EntityColumnMap.
+   =========================================================================================== */
+
+DECLARE @E7EcpCount   int = 0;
+DECLARE @E7OdataCount int = 0;
+DECLARE @E7EcmCount   int = 0;
+
+/* E7-1 : dic.EntityColumnPublication UNMAPPED → MAPPED via MD_PROP_NAME normalisé */
+UPDATE ecp
+SET  ecp.PsseColumnName   = cf.MD_PROP_NAME,
+     ecp.SourceAlias      = N'src',
+     ecp.SourceExpression = CONCAT(N'src.', QUOTENAME(cf.MD_PROP_NAME)),
+     ecp.MapStatus        = N'MAPPED',
+     ecp.IsPublished      = 1,
+     ecp.PublishedOn      = sysdatetime(),
+     ecp.UpdatedOn        = sysdatetime(),
+     ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN src_pjpub.MSP_CUSTOM_FIELDS cf
+    ON LOWER(REPLACE(REPLACE(REPLACE(REPLACE(ecp.Column_FR COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+     = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cf.MD_PROP_NAME COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+LEFT JOIN (VALUES
+    (N'Projects',                        N'CECFE271'),
+    (N'Tasks',                           N'EBAD93E7'),
+    (N'Assignments',                     N'EBAD93E7'),
+    (N'Issues',                          N'EBAD93E7'),
+    (N'Risks',                           N'EBAD93E7'),
+    (N'Scenarios',                       N'EBAD93E7'),
+    (N'Resources',                       N'C8C72436'),
+    (N'ResourceDemandTimephasedDataSet', N'C8C72436')
+) AS ent_type(EntityName_EN, EntTypePrefix)
+    ON ent_type.EntityName_EN = ecp.EntityName_EN
+WHERE ecp.MapStatus = N'UNMAPPED'
+  AND (ent_type.EntTypePrefix IS NULL                               /* entité sans restriction de type (ex. Timesheets) */
+       OR cf.MD_ENT_TYPE_UID LIKE ent_type.EntTypePrefix + N'%');  /* restriction au bon type d'entité CF */
+
+SET @E7EcpCount = @@ROWCOUNT;
+
+/* E7-2 : stg.ODataPsseExactColumnMatch NO_MATCH → CUSTOM_FIELD (sync avec ECP) */
+UPDATE m
+SET  m.PsseColumnName = cf.MD_PROP_NAME,
+     m.MatchType      = N'CUSTOM_FIELD'
+FROM stg.ODataPsseExactColumnMatch m
+JOIN src_pjpub.MSP_CUSTOM_FIELDS cf
+    ON LOWER(REPLACE(REPLACE(REPLACE(REPLACE(m.Column_FR COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+     = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cf.MD_PROP_NAME COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+LEFT JOIN (VALUES
+    (N'Projects',                        N'CECFE271'),
+    (N'Tasks',                           N'EBAD93E7'),
+    (N'Assignments',                     N'EBAD93E7'),
+    (N'Issues',                          N'EBAD93E7'),
+    (N'Risks',                           N'EBAD93E7'),
+    (N'Scenarios',                       N'EBAD93E7'),
+    (N'Resources',                       N'C8C72436'),
+    (N'ResourceDemandTimephasedDataSet', N'C8C72436')
+) AS ent_type(EntityName_EN, EntTypePrefix)
+    ON ent_type.EntityName_EN = m.EntityName_EN
+WHERE m.PsseColumnName IS NULL
+  AND (ent_type.EntTypePrefix IS NULL
+       OR cf.MD_ENT_TYPE_UID LIKE ent_type.EntTypePrefix + N'%');
+
+SET @E7OdataCount = @@ROWCOUNT;
+
+/* E7-3 : dic.EntityColumnMap — RESOLVED_CUSTOM_FIELD */
+UPDATE ecm
+SET  ecm.PsseSourceSchema  = eb.PsseSchemaName,
+     ecm.PsseSourceObject  = eb.PsseObjectName,
+     ecm.PsseColumnName    = ecp.PsseColumnName,
+     ecm.PsseMatchScore    = 95,
+     ecm.ColumnMatchStatus = N'RESOLVED_CUSTOM_FIELD',
+     ecm.UpdatedOn         = sysdatetime(),
+     ecm.UpdatedBy         = suser_sname()
+FROM dic.EntityColumnMap ecm
+JOIN dic.EntityColumnPublication ecp
+    ON  ecp.EntityName_EN = ecm.EntityName_EN
+    AND ecp.Column_EN     = ecm.Column_EN
+JOIN dic.EntityBinding eb
+    ON  eb.EntityName_EN = ecp.EntityName_EN AND eb.IsActive = 1
+JOIN src_pjpub.MSP_CUSTOM_FIELDS cf
+    ON LOWER(REPLACE(REPLACE(REPLACE(REPLACE(ecp.Column_FR COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+     = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cf.MD_PROP_NAME COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+LEFT JOIN (VALUES
+    (N'Projects',                        N'CECFE271'),
+    (N'Tasks',                           N'EBAD93E7'),
+    (N'Assignments',                     N'EBAD93E7'),
+    (N'Issues',                          N'EBAD93E7'),
+    (N'Risks',                           N'EBAD93E7'),
+    (N'Scenarios',                       N'EBAD93E7'),
+    (N'Resources',                       N'C8C72436'),
+    (N'ResourceDemandTimephasedDataSet', N'C8C72436')
+) AS ent_type(EntityName_EN, EntTypePrefix)
+    ON ent_type.EntityName_EN = ecp.EntityName_EN
+WHERE ecm.PsseColumnName     IS NULL
+  AND ecm.ColumnMatchStatus <> N'MANUAL'
+  AND ecp.MapStatus           = N'MAPPED'
+  AND ecp.SourceAlias         = N'src'
+  AND (ent_type.EntTypePrefix IS NULL
+       OR cf.MD_ENT_TYPE_UID LIKE ent_type.EntTypePrefix + N'%');
+
+SET @E7EcmCount = @@ROWCOUNT;
+
+SET @Msg = CONCAT(
+    N'ETAPE E7 : champs custom client résolus via MSP_CUSTOM_FIELDS. ',
+    N'ECP MAPPED=', @E7EcpCount,
+    N'; ODataMatch=', @E7OdataCount,
+    N'; ECM=', @E7EcmCount, N'.'
+);
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'CUSTOM_FIELDS', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@E7EcpCount;
+
+/* ===========================================================================================
+   ETAPE E8 : Découverte automatique des CFs Lookup (MD_PROP_T=21) non résolus par E7
+   Pour chaque colonne UNMAPPED de Tasks/Assignments dont le CF est de type Lookup Table,
+   génère automatiquement deux jointures pjpub :
+     jCF_<12hex>   → MSP_TASK_CUSTOM_FIELDS_VIEW  (filtre par MD_PROP_UID — join intermédiaire)
+     jCF_<12hex>_L → MSP_LOOKUP_TABLE_VALUES       (résout CODE_VALUE → LT_VALUE_TEXT)
+   L'alias est dérivé du MD_PROP_UID (12 premiers chars hex) : unique, portable, sans nom codé.
+   MD_PROP_T = 21 = Lookup Table (seul type nécessitant deux jointures pjpub).
+   Types directs (Text=4, Date=6, Number=17, etc.) sont exposés dans la UserView par PSSE.
+   Complémentaire à Phase P (qui gère les cas déclarés manuellement avec JoinStatus=MANUAL).
+   =========================================================================================== */
+
+DECLARE @E8JoinCount int = 0;
+DECLARE @E8EcpCount  int = 0;
+
+DECLARE @E8Lookup TABLE (
+    EntityName_EN  nvarchar(256) NOT NULL,
+    Column_EN      nvarchar(256) NOT NULL,
+    MD_PROP_UID    uniqueidentifier NOT NULL,
+    JoinAlias      nvarchar(60) NOT NULL,   /* jCF_<12 hex chars> */
+    JoinAlias_L    nvarchar(60) NOT NULL    /* jCF_<12 hex chars>_L */
+);
+
+INSERT INTO @E8Lookup (EntityName_EN, Column_EN, MD_PROP_UID, JoinAlias, JoinAlias_L)
+SELECT DISTINCT
+    ecp.EntityName_EN,
+    ecp.Column_EN,
+    cf.MD_PROP_UID,
+    CONCAT(N'jCF_', LOWER(LEFT(REPLACE(CONVERT(nvarchar(36), cf.MD_PROP_UID), N'-', N''), 12))),
+    CONCAT(N'jCF_', LOWER(LEFT(REPLACE(CONVERT(nvarchar(36), cf.MD_PROP_UID), N'-', N''), 12)), N'_L')
+FROM dic.EntityColumnPublication ecp
+JOIN src_pjpub.MSP_CUSTOM_FIELDS cf
+    ON LOWER(REPLACE(REPLACE(REPLACE(REPLACE(ecp.Column_FR COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+     = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cf.MD_PROP_NAME COLLATE DATABASE_DEFAULT,
+         N' ', N''), N'-', N''), N'(', N''), N')', N''))
+WHERE ecp.MapStatus     = N'UNMAPPED'
+  AND cf.MD_PROP_T      = 21               /* Lookup Table : CODE_VALUE → LT_VALUE_TEXT via LTV */
+  AND cf.MD_ENT_TYPE_UID LIKE N'EBAD93E7%' /* Constante PSSE : entités Task (Tasks + Assignments) */
+  AND ecp.EntityName_EN IN (N'Tasks', N'Assignments');
+
+/* E8-1 : Insérer les jointures dans dic.EntityJoin */
+MERGE dic.EntityJoin AS tgt
+USING (
+    /* Jointure intermédiaire : accès à la valeur CF par MD_PROP_UID */
+    SELECT
+        l.EntityName_EN, l.JoinAlias AS JoinTag,
+        N'pjpub' AS PsseSchemaName, N'MSP_TASK_CUSTOM_FIELDS_VIEW' AS PsseObjectName,
+        N'src_pjpub' AS SmartBoxSchemaName, l.JoinAlias AS JoinAlias, N'LEFT' AS JoinType,
+        CONCAT(l.JoinAlias, N'.TASK_UID = src.TaskUID AND ',
+               l.JoinAlias, N'.MD_PROP_UID = N''',
+               LOWER(CONVERT(nvarchar(36), l.MD_PROP_UID)), N'''') AS JoinExpression,
+        1 AS IsActive, N'AUTO_CF' AS JoinStatus, NULL AS JoinDependsOn
+    FROM @E8Lookup l
+    UNION ALL
+    /* Jointure lookup texte : CODE_VALUE → LT_VALUE_TEXT */
+    SELECT
+        l.EntityName_EN, l.JoinAlias_L AS JoinTag,
+        N'pjpub', N'MSP_LOOKUP_TABLE_VALUES', N'src_pjpub',
+        l.JoinAlias_L, N'LEFT',
+        CONCAT(l.JoinAlias_L, N'.LT_STRUCT_UID = ', l.JoinAlias,
+               N'.CODE_VALUE AND ', l.JoinAlias_L,
+               N'.LCID = (SELECT TOP 1 CASE WHEN Language = N''FR'' THEN 1036 ELSE 1033 END FROM cfg.PWA)'),
+        1, N'AUTO_CF', l.JoinAlias  /* JoinDependsOn = alias du join intermédiaire */
+    FROM @E8Lookup l
+) AS src (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+          JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus, JoinDependsOn)
+ON  tgt.EntityName_EN = src.EntityName_EN
+AND tgt.JoinTag       = src.JoinTag
+WHEN NOT MATCHED THEN
+    INSERT (EntityName_EN, JoinTag, PsseSchemaName, PsseObjectName, SmartBoxSchemaName,
+            JoinAlias, JoinType, JoinExpression, IsActive, JoinStatus, JoinDependsOn)
+    VALUES (src.EntityName_EN, src.JoinTag, src.PsseSchemaName, src.PsseObjectName,
+            src.SmartBoxSchemaName, src.JoinAlias, src.JoinType, src.JoinExpression,
+            src.IsActive, src.JoinStatus, src.JoinDependsOn)
+WHEN MATCHED AND tgt.JoinStatus <> N'MANUAL' THEN
+    UPDATE SET JoinExpression = src.JoinExpression, JoinStatus = src.JoinStatus,
+               JoinDependsOn = src.JoinDependsOn,
+               UpdatedOn = sysdatetime(), UpdatedBy = suser_sname();
+
+SET @E8JoinCount = @@ROWCOUNT;
+
+/* E8-2 : Mettre à jour dic.EntityColumnPublication UNMAPPED → MAPPED (LT_VALUE_TEXT) */
+UPDATE ecp
+SET  ecp.PsseColumnName   = N'LT_VALUE_TEXT',
+     ecp.SourceAlias      = l.JoinAlias_L,
+     ecp.SourceExpression = CONCAT(l.JoinAlias_L, N'.[LT_VALUE_TEXT]'),
+     ecp.MapStatus        = N'MAPPED',
+     ecp.IsPublished      = 1,
+     ecp.PublishedOn      = sysdatetime(),
+     ecp.UpdatedOn        = sysdatetime(),
+     ecp.UpdatedBy        = suser_sname()
+FROM dic.EntityColumnPublication ecp
+JOIN @E8Lookup l
+    ON  l.EntityName_EN = ecp.EntityName_EN
+    AND l.Column_EN     = ecp.Column_EN
+WHERE ecp.MapStatus <> N'MANUAL';
+
+SET @E8EcpCount = @@ROWCOUNT;
+
+SET @Msg = CONCAT(
+    N'ETAPE E8 : CFs Lookup auto-découverts (MD_PROP_T=21, UNMAPPED après E7). ',
+    N'dic.EntityJoin=', @E8JoinCount, N'; ECP MAPPED=', @E8EcpCount, N'.'
+);
+EXEC log.usp_WriteScriptLog
+    @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
+    @Phase=N'CF_LOOKUP_AUTO', @Severity=N'INFO', @Status=N'COMPLETED',
+    @Message=@Msg, @RowsAffected=@E8EcpCount;
 
 /* ===========================================================================================
    ETAPE F : Journal de construction (stg.EntityDraftBuildLog)

@@ -153,35 +153,51 @@ END;
 GO
 
 /*=====================================================================================================================
-    PARAMETRES CLIENT - SECTION A MODIFIER PAR LE DBA ou le DBO
+    PARAMETRES CLIENT — SECTION À MODIFIER PAR LE DBA/DBO POUR CHAQUE DÉPLOIEMENT
 
-    Pour adapter ce script à un autre pwa/palier/client/environnement, modifier les valeurs ci-dessous seulement.
-    Le reste du script lit ces variables et alimente cfg.Settings, cfg.PWA et cfg.PwaSchemaScope.
-    NE TOUCHEZ PLUS À RIEN APRÈS AVOIR MODIFIÉ CES VARIABLES, SAUF SI VOUS SAVEZ EXACTEMENT CE QUE VOUS FAITES.
+    Seul ce bloc est spécifique à un environnement. Le reste du script est générique.
 
-    Valeurs MTMD confirmÉes pour ce déploiement:
-      - Base SmartBox cible             : SPR, soit la base CRÉÉE PAR Fouad dans laquelle ce script est exécuté.
-      - BD contenu PWA source           : SP_SPR_POC_Contenu.
-      - Compte de déploiement utilisé   : MTQ\franbreton.
+    OBLIGATOIRES (le script s'arrête avec THROW si NULL ou vide) :
+      @ContentDbName      : Nom de la BD contenu PSSE source    (ex. SP_ClientA_Contenu)
+      @DesignDatabaseName : Nom de la BD SmartBox cible         (ex. SmartBox_ClientA)
+
+    RECOMMANDÉS :
+      @ClientName         : Libellé client pour les logs        (ex. 'ClientA')
+      @EnvironmentName    : Palier de déploiement               (DEV / TEST / QA / PROD)
+      @PwaLanguage        : Langue principale de publication     (FR ou EN)
+
+    OPTIONNEL :
+      @ExpectedDeploymentLogin : Login Windows/SQL attendu ; NULL = vérification désactivée
+      @FrozenViewSnapshotName  : Laissez NULL → auto-dérivé : v6_04a_Frozen_<ContentDbName>_Internal_Views.sql
 =====================================================================================================================*/
-DECLARE @ClientName nvarchar(128) = N'MTMD';                     -- Nom du client ou ministère.
-DECLARE @EnvironmentName nvarchar(30) = N'POC';                  -- DEV, TEST, QA, PROD, etc.
-DECLARE @ExpectedDeploymentLogin sysname = N'MTQ\franbreton';    -- Mettre NULL pour ne pas produire d'avertissement de login.
-DECLARE @DesignDatabaseName sysname = N'SPR';                    -- Nom attendu de la base SmartBox cible.
-DECLARE @ContentDbName sysname = N'SP_SPR_POC_Contenu';          -- Nom de la BD contenu PWA source du client.
+DECLARE @ClientName nvarchar(128) = NULL;                        -- Ex. 'MTMD', 'MinistereX'
+DECLARE @EnvironmentName nvarchar(30) = NULL;                    -- DEV, TEST, QA, PROD
+DECLARE @ExpectedDeploymentLogin sysname = NULL;                 -- NULL = vérification de login désactivée.
+DECLARE @DesignDatabaseName sysname = NULL;                      -- !! OBLIGATOIRE !! Nom de la BD SmartBox cible.
+DECLARE @ContentDbName sysname = NULL;                           -- !! OBLIGATOIRE !! Nom de la BD contenu PSSE source.
 DECLARE @PwaId int = 1;                                          -- V6 supporte une PWA active dans cette trousse.
-DECLARE @PwaLanguage nvarchar(10) = N'FR';                       -- Langue principale: FR ou EN.
+DECLARE @PwaLanguage nvarchar(10) = N'FR';                       -- Langue principale : FR ou EN.
 DECLARE @ProjectSchemasCsv nvarchar(200) = N'pjrep,pjpub';       -- Schémas natifs PSSE à inventorier.
 
-/* Paramètres de comportement V6 - modifier seulement si le mode de déploiement change. */
+/* Comportement V6 — valeurs stables entre environnements, modifier seulement si besoin. */
 DECLARE @ViewDefinitionMode nvarchar(40) = N'FROZEN_SNAPSHOT';
-DECLARE @FrozenViewSnapshotName nvarchar(260) = N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql';
-DECLARE @ExcludePsseContentCustomFields bit = 1;                 -- 1 = ne pas publier les champs personnalisés du content PSSE.
+DECLARE @FrozenViewSnapshotName nvarchar(260) = NULL;            -- NULL = auto-dérivé depuis ContentDbName.
+DECLARE @ExcludePsseContentCustomFields bit = 1;                 -- 1 = ne pas publier les CFs du content PSSE.
 DECLARE @LoadMode nvarchar(40) = N'STG_IMPORT_TABLES';           -- Les imports dictionnaire passent par stg.import_*.
-DECLARE @Day1LoadSourceMode nvarchar(30) = N'TOOL';              -- TOOL ou DBA_CSV pour le chargement initial vers stg.import_*.
+DECLARE @Day1LoadSourceMode nvarchar(30) = N'TOOL';              -- TOOL ou DBA_CSV pour le chargement initial.
 DECLARE @AllowCsvDay1Import nvarchar(20) = N'OPTIONAL';          -- CSV permis seulement au jour 1 si le DBA le choisit.
 DECLARE @ReviewMode nvarchar(30) = N'TABLES';                    -- Les corrections passent par review.*.
 DECLARE @ReportMode nvarchar(30) = N'TABLES';                    -- Les rapports sont persistés dans report.*.
+
+/* ── Validation des paramètres obligatoires ──────────────────────────────────────────── */
+IF @ContentDbName IS NULL OR LTRIM(RTRIM(@ContentDbName)) = N''
+    THROW 62010, N'PARAMETRES CLIENT : @ContentDbName est obligatoire. Définir le nom de la BD contenu PSSE source.', 1;
+IF @DesignDatabaseName IS NULL OR LTRIM(RTRIM(@DesignDatabaseName)) = N''
+    THROW 62011, N'PARAMETRES CLIENT : @DesignDatabaseName est obligatoire. Définir le nom de la BD SmartBox cible.', 1;
+
+/* Auto-dériver FrozenViewSnapshotName si non fourni (convention : v6_04a_Frozen_<ContentDbName>_Internal_Views.sql) */
+IF @FrozenViewSnapshotName IS NULL
+    SET @FrozenViewSnapshotName = CONCAT(N'v6_04a_Frozen_', @ContentDbName, N'_Internal_Views.sql');
 
 /*=====================================================================================================================
     VARIABLES TECHNIQUES - NE PAS MODIFIER
@@ -222,7 +238,7 @@ MERGE cfg.Settings AS T
 USING
 (
     SELECT N'PackageVersion' AS SettingKey, N'V6-DRAFT' AS SettingValue, N'IDENTITY' AS SettingGroup, N'nvarchar(30)' AS SettingType, CONVERT(bit, 1) AS IsRequired, CONVERT(bit, 0) AS IsSecret, CONVERT(bit, 0) AS IsDeprecated, N'Version logique de la trousse appliquée.' AS Description
-    UNION ALL SELECT N'ToolboxDbName', CONVERT(nvarchar(4000), DB_NAME()), N'IDENTITY', N'sysname', 1, 0, 0, N'Nom de la base SmartBox cible existante. Pour la conception courante: SPR.'
+    UNION ALL SELECT N'ToolboxDbName', CONVERT(nvarchar(4000), DB_NAME()), N'IDENTITY', N'sysname', 1, 0, 0, N'Nom de la base SmartBox cible existante.'
     UNION ALL SELECT N'DesignDatabaseName', CONVERT(nvarchar(4000), @DesignDatabaseName), N'IDENTITY', N'sysname', 1, 0, 0, N'Base de conception SmartBox V6.'
     UNION ALL SELECT N'EnvironmentName', CONVERT(nvarchar(4000), @EnvironmentName), N'IDENTITY', N'nvarchar(30)', 0, 0, 0, N'Nom logique de l''environnement.'
     UNION ALL SELECT N'DeploymentMode', N'EXISTING_DATABASE', N'IDENTITY', N'nvarchar(40)', 1, 0, 0, N'La base existe déjà; la trousse applicative ne crée pas la base.'
@@ -241,10 +257,10 @@ USING
     UNION ALL SELECT N'ReportMode', CONVERT(nvarchar(4000), @ReportMode), N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les rapports sont persistés dans report.*.'
     UNION ALL SELECT N'LogMode', N'LOG_SCHEMA', N'MODE', N'nvarchar(30)', 1, 0, 0, N'Les logs sont écrits dans log.ScriptExecutionLog.'
     UNION ALL SELECT N'ViewGenerationMode', N'NATIVE_STACKS', N'MODE', N'nvarchar(40)', 1, 0, 0, N'Génération principale via les piles natives.'
-    UNION ALL SELECT N'ViewDefinitionMode', CONVERT(nvarchar(4000), @ViewDefinitionMode), N'VIEW', N'nvarchar(40)', 1, 0, 0, N'Définitions de vues figées dans la trousse V6; pas de dépendance runtime à SP_SPR_POC_Contenu.'
+    UNION ALL SELECT N'ViewDefinitionMode', CONVERT(nvarchar(4000), @ViewDefinitionMode), N'VIEW', N'nvarchar(40)', 1, 0, 0, N'Définitions de vues figées dans la trousse V6; pas de dépendance runtime à la BD contenu PSSE.'
     UNION ALL SELECT N'FrozenViewSnapshotName', CONVERT(nvarchar(4000), @FrozenViewSnapshotName), N'VIEW', N'nvarchar(260)', 1, 0, 0, N'Fichier snapshot contenant les définitions internes tbx/tbx_fr/tbx_master.'
     UNION ALL SELECT N'ExcludePsseContentCustomFields', CONVERT(nvarchar(4000), @ExcludePsseContentCustomFields), N'VIEW', N'bit', 1, 0, 0, N'Les champs personnalisés provenant de la BD content PSSE ne sont pas publiés dans ProjectData.'
-    UNION ALL SELECT N'ReferenceViewDbName', N'SP_SPR_POC_Contenu', N'VIEW', N'sysname', 0, 0, 1, N'Ancienne base de référence utilisée pour générer le snapshot; non requise au runtime V6.'
+    UNION ALL SELECT N'ReferenceViewDbName', CONVERT(nvarchar(4000), @ContentDbName), N'VIEW', N'sysname', 0, 0, 1, N'Ancienne base de référence utilisée pour générer le snapshot; non requise au runtime V6.'
     UNION ALL SELECT N'CsvExportMode', N'DISABLED', N'MODE', N'nvarchar(20)', 1, 0, 0, N'Exports CSV depuis SQL Server desactives.'
     UNION ALL SELECT N'UseXpCmdShell', N'0', N'SECURITY', N'bit', 1, 0, 0, N'xp_cmdshell non requis par la trousse applicative V6.'
     UNION ALL SELECT N'RequireExistingDatabase', N'1', N'SECURITY', N'bit', 1, 0, 0, N'La base cible doit exister avant la trousse applicative.'

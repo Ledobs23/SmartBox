@@ -73,24 +73,23 @@ FROM cfg.Settings
 WHERE SettingKey = N'FrozenViewSnapshotName';
 
 SET @ViewDefinitionMode = ISNULL(@ViewDefinitionMode, N'FROZEN_SNAPSHOT');
-SET @FrozenViewSnapshotName = ISNULL(@FrozenViewSnapshotName, N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql');
 
-IF @FrozenViewSnapshotName = N'v6_06a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql'
+/* Auto-dériver FrozenViewSnapshotName depuis ContentDbName si absent (convention portabilité :
+   v6_04a_Frozen_<ContentDbName>_Internal_Views.sql). Défini par v6_02a lors du déploiement initial. */
+IF @FrozenViewSnapshotName IS NULL
 BEGIN
-    UPDATE cfg.Settings
-    SET SettingValue = N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql',
-        UpdatedOn = sysdatetime(),
-        UpdatedBy = suser_sname()
-    WHERE SettingKey = N'FrozenViewSnapshotName';
-
-    SET @FrozenViewSnapshotName = N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql';
+    DECLARE @_ContentDbForSnap sysname;
+    SELECT @_ContentDbForSnap = NULLIF(LTRIM(RTRIM(SettingValue)), N'')
+    FROM cfg.Settings WHERE SettingKey = N'ContentDbName';
+    IF @_ContentDbForSnap IS NOT NULL
+        SET @FrozenViewSnapshotName = CONCAT(N'v6_04a_Frozen_', @_ContentDbForSnap, N'_Internal_Views.sql');
 END;
 
 IF @ViewDefinitionMode <> N'FROZEN_SNAPSHOT'
     THROW 66008, N'v6_04a supporte actuellement seulement cfg.Settings.ViewDefinitionMode = FROZEN_SNAPSHOT.', 1;
 
-IF @FrozenViewSnapshotName <> N'v6_04a_Frozen_SP_SPR_POC_Contenu_Internal_Views.sql'
-    THROW 66009, N'Le snapshot configuré dans cfg.Settings.FrozenViewSnapshotName ne correspond pas au snapshot inclus dans v6_04a.', 1;
+IF @FrozenViewSnapshotName IS NULL OR LTRIM(RTRIM(@FrozenViewSnapshotName)) = N''
+    THROW 66009, N'cfg.Settings.FrozenViewSnapshotName non configuré. Exécuter v6_02a avant v6_04a.', 1;
 
 EXEC log.usp_WriteScriptLog
     @RunId = @RunId,

@@ -5,6 +5,30 @@
 
 ---
 
+## Objectif de livraison court terme
+
+Terminer la trousse SmartBox V6 au plus vite avec une architecture suffisamment stable pour supporter les prochains projets sans réouvrir le chantier de fond.
+
+### Cible finale recherchée
+
+1. **Tout ce qui est natif et connu** dans les endpoints OData PSSE est seedé de façon **hardcodée et déterministe** à partir des fichiers de référence.
+2. **Tout ce qui dépend du projet de migration** (champs personnalisés simples, lookups, libellés variables) est **détecté et mappé automatiquement** depuis les tables sources PSSE (`pjpub`, `pjrep`).
+3. **Aucune colonne native ne dépend de l'auto-découverte**.
+4. **Aucun CAST(NULL) silencieux** sur des colonnes réelles en production finale.
+5. La trousse doit pouvoir être rejouée sur un autre environnement en ne changeant que la configuration (`ContentDbName`, synonymes, PWA, dictionnaire CSV).
+
+### Définition de "trousse terminée"
+
+La trousse est considérée terminée lorsque :
+
+- `v6_00z` → `v6_07a` s'exécutent sans correction manuelle intermédiaire sur MTMD
+- les vues `ProjectData.*` EN et FR prioritaires se chargent
+- les colonnes natives attendues proviennent du seed
+- les champs personnalisés connus du client sont récupérés automatiquement depuis PSSE
+- il n'y a plus de dépendance fonctionnelle à `v6_04a` pour la génération finale des vues
+
+---
+
 ## Décisions architecturales confirmées
 
 ### Modèle de vues en 3 couches
@@ -33,13 +57,44 @@ ProjectData.*  — contrat stable
 7. **Aucun mapping manuel** pour les colonnes natives — le seed vient des fichiers de référence OData.
 8. **Portabilité totale** — changer d'environnement PSSE = reconfigurer ContentDbName + synonymes uniquement.
 
+### Répartition des responsabilités (gelée pour finir vite)
+
+1. **`v6_04a`** = référence native / oracle de régression pendant la transition.  
+   Il ne doit plus devenir le propriétaire de la logique finale des vues dynamiques.
+
+2. **`v6_05b`** = propriétaire du **seed natif**.  
+   Il alimente les bindings, jointures et colonnes connues/stables à partir des fichiers de référence OData.
+
+3. **`v6_06a`** = propriétaire du **complément variable par environnement**.  
+   Il ne doit servir qu'à :
+   - résoudre les champs personnalisés
+   - générer les jointures dérivées nécessaires aux CFs/lookups
+   - journaliser les écarts restants
+
+4. **`v6_07a`** = propriétaire exclusif de la **génération mécanique des couches de vues**.  
+   Il ne doit pas contenir de logique métier de mapping autre que la projection des métadonnées de publication.
+
+5. **`tbx_fr`** = schéma en voie de retrait.  
+   Aucun nouveau développement ne doit dépendre de `tbx_fr`. Si une compatibilité temporaire est nécessaire, elle doit être explicitement documentée comme transition.
+
+### Contrat canonique de nommage
+
+- Les noms d'entités canoniques côté contrat public sont les noms **EN pluriels OData** : `Projects`, `Tasks`, `Assignments`, `Resources`, `Timesheets`, etc.
+- Les noms FR publics dérivent du dictionnaire d'alias : `Projets`, `Tâches`, `Affectations`, `Ressources`, `FeuillesDeTemps`, etc.
+- Les couches cibles finales sont :
+  - `tbx_master.<EntityName_EN>`
+  - `tbx.<EntityName_EN>`
+  - `ProjectData.<EntityName_EN>`
+  - `ProjectData.<EntityName_FR>`
+- Le plan doit éviter tout doublon de type `Timesheet` vs `Timesheets` ou toute variation non documentée de nom d'entité.
+
 ---
 
 ## Sources disponibles
 
 | Fichier | Rôle |
 |---|---|
-| `Equivalence des tables OData_sans custom field.sql` | Référence native : Projects, Tasks, Assignments, Resources, TimeSet, Timesheet |
+| `Equivalence des tables OData_sans custom field.sql` | Référence native : Projects, Tasks, Assignments, Resources, TimeSet, Timesheets |
 | `Requetes pour les vues liees au portefeuille.sql` | Référence native : PortfolioAnalyses, PortfolioAnalysisProjects |
 | `Requetes pour les vues liees aux affectations.sql` | Référence native : AssignmentBaselines, AssignmentBaselineTimephased, AssignmentTimephased |
 | `Requetes pour les vues liees aux business driver, livrables et couts.sql` | Référence native : BusinessDrivers, BusinessDriverDepartments, Deliverables, CostScenario, CostConstraint |
@@ -51,6 +106,16 @@ ProjectData.*  — contrat stable
 | `Requetes pour les vues liees aux taches.sql` | Référence native : TaskBaselines, TaskBaselineTimephased, TaskTimephased |
 | `Requetes pour les vues liees aux timesheet.sql` | Référence native : TimesheetClasses, TimesheetPeriods, TimesheetLines, FiscalPeriods, TimesheetLineActualDataSet |
 | `Requetes corrections.sql` | Requêtes corrigées avec CFs clients (Tasks + Assignments avec ITT et autres CFs) |
+
+---
+
+## Hors périmètre pour accélérer la livraison
+
+1. Pas de refonte supplémentaire de `v6_01a` à `v6_03a` sauf blocage réel.
+2. Pas de nouvelles couches de consommation au-delà de `tbx_master`, `tbx`, `ProjectData`.
+3. Pas de support long terme de `tbx_fr` comme surface publique.
+4. Pas de correction manuelle entité par entité pour des colonnes natives déjà couvertes par les fichiers de référence.
+5. Pas d'optimisation cosmétique prioritaire de documentation tant que le pipeline final n'est pas stable.
 
 ---
 
@@ -77,12 +142,19 @@ ProjectData.*  — contrat stable
 5. Les CFs clients (colonnes qui varient par environnement) ne sont PAS dans ce seed — elles sont gérées par v6_06a auto-découverte.
 
 **Entités à couvrir (40 au total) :**
-Projects, Tasks, Assignments, Resources, TimeSet, Timesheet, PortfolioAnalyses, PortfolioAnalysisProjects, AssignmentBaselines, AssignmentBaselineTimephasedDataSet, AssignmentTimephasedDataSet, BusinessDrivers, BusinessDriverDepartments, Deliverables, CostScenarioProjects, CostConstraintScenarios, Engagements, EngagementsComments, EngagementsTimephasedDataSet, Prioritizations, PrioritizationDrivers, PrioritizationDriverRelations, ProjectBaselines, ProjectWorkflowStageDataSet, ResourceConstraintScenarios, ResourceScenarioProjects, ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet, Risks, RiskTaskAssociations, Issues, IssueTaskAssociations, TaskBaselines, TaskBaselineTimephasedDataSet, TaskTimephasedDataSet, TimesheetClasses, TimesheetPeriods, TimesheetLines, FiscalPeriods, TimesheetLineActualDataSet
+Projects, Tasks, Assignments, Resources, TimeSet, Timesheets, PortfolioAnalyses, PortfolioAnalysisProjects, AssignmentBaselines, AssignmentBaselineTimephasedDataSet, AssignmentTimephasedDataSet, BusinessDrivers, BusinessDriverDepartments, Deliverables, CostScenarioProjects, CostConstraintScenarios, Engagements, EngagementsComments, EngagementsTimephasedDataSet, Prioritizations, PrioritizationDrivers, PrioritizationDriverRelations, ProjectBaselines, ProjectWorkflowStageDataSet, ResourceConstraintScenarios, ResourceScenarioProjects, ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet, Risks, RiskTaskAssociations, Issues, IssueTaskAssociations, TaskBaselines, TaskBaselineTimephasedDataSet, TaskTimephasedDataSet, TimesheetClasses, TimesheetPeriods, TimesheetLines, FiscalPeriods, TimesheetLineActualDataSet
 
 **Comment construire le seed :**
 - Lire chaque fichier de référence
 - Pour chaque entité : extraire SourceAlias (alias de table dans la requête), SourceExpression (nom de colonne PSSE), Column_EN (alias OData anglais tel quel), Column_FR (alias français tel quel)
 - Les CAST(NULL) explicites dans les fichiers de référence = NAVIGATION
+
+**Critères de sortie de la phase 1 :**
+- 100 % des entités natives listées sont seedées
+- 0 doublon `(EntityName_EN, Column_EN)` dans `dic.EntityColumnPublication`
+- 0 doublon `(EntityName_EN, JoinTag)` dans `dic.EntityJoin`
+- 100 % des colonnes natives des fichiers de référence sont marquées `MAPPED` ou `NAVIGATION`
+- le seed natif devient la source de vérité des colonnes connues, sans dépendre de l'auto-découverte
 
 ---
 
@@ -99,6 +171,12 @@ Projects, Tasks, Assignments, Resources, TimeSet, Timesheet, PortfolioAnalyses, 
 - Généraliser E7 pour couvrir toutes les entités (Projects, Resources aussi, pas seulement Tasks/Assignments)
 - Si après E7+E8 une colonne reste UNMAPPED → logger en WARN dans `stg.EntityDraftBuildLog`, ne pas émettre CAST(NULL) silencieux
 - Supprimer tout GUID hardcodé résiduel
+
+**Critères de sortie de la phase 2 :**
+- 0 GUID hardcodé résiduel dans `v6_06a`
+- les CFs simples et CFs lookup sont résolus automatiquement par tables sources PSSE
+- toute colonne restant `UNMAPPED` après auto-découverte est journalisée explicitement
+- aucune colonne native n'est rétrogradée par l'auto-découverte
 
 ---
 
@@ -129,6 +207,13 @@ Projects, Tasks, Assignments, Resources, TimeSet, Timesheet, PortfolioAnalyses, 
 - Blocs de génération `tbx_fr.*` (remplacés par ProjectData FR)
 - Génération indépendante parallèle des 4 variantes (remplacée par la cascade 3 couches)
 
+**Critères de sortie de la phase 3 :**
+- `tbx_master` lit directement les synonymes `src_*`
+- `tbx` lit uniquement `tbx_master`
+- `ProjectData` lit uniquement `tbx`
+- aucune vue finale générée par `v6_07a` ne dépend directement de `src_*`
+- le schéma `tbx_fr` n'est plus requis pour le contrat final
+
 ---
 
 ### PHASE 4 — Nettoyage et cohérence des scripts existants
@@ -154,26 +239,34 @@ Projects, Tasks, Assignments, Resources, TimeSet, Timesheet, PortfolioAnalyses, 
 **.gitignore :**
 - Ajouter `BACKUP_Views_*.sql` pour exclure les fichiers de sauvegarde locaux
 
+**Préflight / sécurité avant refonte :**
+- Sauvegarder les définitions actuelles des vues avant toute refonte majeure
+- Conserver un point Git propre avant démarrage de la Phase 1
+- Vérifier la collation attendue de la BDI avant les phases de matching normalisé
+- Noter explicitement si une compatibilité temporaire avec des consommateurs `tbx_fr` est requise
+
 ---
 
 ### PHASE 5 — Validation sur MTMD
 
 **Séquence de test :**
+0. Vérifier la collation de la base (`Latin1_General_CI_AS_KS_WS`) et sauvegarder les vues existantes
 1. v6_00z — reset tables de travail
 2. v6_02a — attacher base existante (ContentDbName = SP_SPR_POC_Contenu)
 3. v6_03a — créer fondations (cfg, dic, stg, etc.)
-4. v6_04a — snapshot vues internes PSSE (mode FROZEN_SNAPSHOT)
+4. v6_04a — snapshot vues internes PSSE (mode FROZEN_SNAPSHOT, utilisé comme référence/oracle de comparaison pendant la transition)
 5. v6_05a — chargement dictionnaire existant (à garder en parallèle pendant transition)
 6. **v6_05b** — seed natif depuis fichiers de référence (nouveau)
 7. v6_06a — auto-découverte CFs + publication
 8. v6_07a — génération vues 3 couches
 
 **Checks de validation :**
-- 0 vue UNMAPPED dans `dic.EntityColumnPublication` après pipeline complet
-- 0 vue invalide dans `sys.objects` après v6_07a
-- Toutes les colonnes des fichiers de référence présentes dans tbx.*
-- Colonnes CFs clients MTMD présentes dans tbx.* (Axe, StatutProjet, etc.)
-- `ProjectData.Projects` et `ProjectData.Projets` accessibles et correctes
+- 0 colonne native `UNMAPPED` dans `dic.EntityColumnPublication` après pipeline complet
+- 0 vue invalide ou en erreur dans `report.ViewStackValidation` sur le périmètre prioritaire
+- Toutes les colonnes des fichiers de référence présentes dans `tbx.*`
+- Colonnes CFs clients MTMD présentes dans `tbx.*` (Axe, StatutProjet, etc.)
+- `ProjectData.Projects`, `ProjectData.Projets`, `ProjectData.Tasks`, `ProjectData.Tâches`, `ProjectData.Assignments`, `ProjectData.Affectations`, `ProjectData.Timesheets`, `ProjectData.FeuillesDeTemps` accessibles et correctes
+- `tbx_master.*` sert bien de source unique à `tbx.*`
 - Test de portabilité : changer ContentDbName → synonymes → re-exécuter → vues correctes
 
 ---
@@ -191,17 +284,19 @@ Projects, Tasks, Assignments, Resources, TimeSet, Timesheet, PortfolioAnalyses, 
 | v6_06a | Corrigé — Phase P portabilité UID, E7/E8 auto-découverte |
 | v6_07a | Corrigé — JoinDependsOn, NAVIGATION CAST — refonte 3 couches à faire (Phase 3) |
 
-**Commits en attente (à pousser avant de commencer la Phase 1) :**
-- v6_02a, v6_04a, v6_06a, v6_07a — toutes les corrections de la session précédente
+**État Git à rafraîchir avant reprise :**
+- Toujours vérifier `git status --short` avant de commencer la Phase 1
+- Ne pas se fier à cette section comme source de vérité sur les commits en attente
 
 ---
 
 ## Ordre d'exécution recommandé pour reprise
 
-1. Git commit + push des corrections existantes (v6_02a, v6_04a, v6_06a, v6_07a)
-2. Phase 1 : construire v6_05b depuis les fichiers de référence
-3. Phase 2 : réviser v6_06a auto-découverte si nécessaire après test
-4. Phase 3 : réviser v6_07a génération 3 couches
-5. Phase 4 : nettoyage (v6_05a normalisation F2, .gitignore)
-6. Phase 5 : validation MTMD complète
-7. Git commit + push final
+1. Geler le scope et vérifier l'état Git réel
+2. Sauvegarder les vues actuelles + vérifier la collation
+3. Phase 1 : construire `v6_05b` depuis les fichiers de référence
+4. Phase 2 : réviser `v6_06a` pour que l'auto-découverte ne traite que le variable par environnement
+5. Phase 3 : réviser `v6_07a` pour appliquer strictement le modèle 3 couches
+6. Phase 4 : nettoyage ciblé (`v6_05a` normalisation F2, `.gitignore`, compatibilité transitoire si nécessaire)
+7. Phase 5 : validation MTMD complète
+8. Commit + push final

@@ -1,0 +1,8 @@
+﻿"EntityName_EN","Column_EN","CandidateRows","DistinctCandidateRows","ExactRows","HeuristicRows","NoMatchRows"
+"ResourceTimephasedDataSet","ResourceId","14","14","0","14","0"
+"ResourceTimephasedDataSet","TimeByDay","13","13","13","0","0"
+"ResourceTimephasedDataSet","FiscalPeriodId","6","6","0","6","0"
+"ResourceTimephasedDataSet","ResourceName","6","6","6","0","0"
+"ResourceTimephasedDataSet","BaseCapacity","2","2","2","0","0"
+"ResourceTimephasedDataSet","Capacity","2","2","2","0","0"
+"ResourceTimephasedDataSet","ResourceModifiedDate","2","2","2","0","0"

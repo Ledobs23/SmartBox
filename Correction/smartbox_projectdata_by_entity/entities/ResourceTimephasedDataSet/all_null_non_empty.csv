@@ -1,0 +1,5 @@
+﻿"ViewName","ViewLanguage","ColumnName","TotalRows","NonNullCount","EntityName_EN","Column_EN","Column_FR","MapStatus","PsseSourceSchema","PsseSourceObject","PsseColumnName","SourceExpression","FallbackExpression"
+"JeuDonnéesChronologiquesRessource","FR","Heure","369848","0","ResourceTimephasedDataSet","Time","Heure","NAVIGATION","","","","",""
+"JeuDonnéesChronologiquesRessource","FR","Ressource","369848","0","ResourceTimephasedDataSet","Resource","Ressource","NAVIGATION","","","","",""
+"ResourceTimephasedDataSet","EN","Resource","369848","0","ResourceTimephasedDataSet","Resource","Ressource","NAVIGATION","","","","",""
+"ResourceTimephasedDataSet","EN","Time","369848","0","ResourceTimephasedDataSet","Time","Heure","NAVIGATION","","","","",""

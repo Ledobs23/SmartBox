@@ -1,0 +1,3 @@
+﻿"ViewName","ViewLanguage","ColumnName","TotalRows","NonNullCount","EntityName_EN","Column_EN","Column_FR","MapStatus","PsseSourceSchema","PsseSourceObject","PsseColumnName","SourceExpression","FallbackExpression"
+"AssignmentBaselineTimephasedDataSet","EN","ResourceId","418035","0","AssignmentBaselineTimephasedDataSet","ResourceId","IdRessource","MAPPED","pjrep","MSP_TimesheetLine_UserView","ResourceUID","j2.[ResourceUID]",""
+"JeuDonnéesChronologiquesRéférenceAffectation","FR","IdRessource","418035","0","AssignmentBaselineTimephasedDataSet","ResourceId","IdRessource","MAPPED","pjrep","MSP_TimesheetLine_UserView","ResourceUID","j2.[ResourceUID]",""

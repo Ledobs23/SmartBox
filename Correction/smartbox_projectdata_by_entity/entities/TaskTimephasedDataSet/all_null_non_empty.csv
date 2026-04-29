@@ -1,0 +1,7 @@
+﻿"ViewName","ViewLanguage","ColumnName","TotalRows","NonNullCount","EntityName_EN","Column_EN","Column_FR","MapStatus","PsseSourceSchema","PsseSourceObject","PsseColumnName","SourceExpression","FallbackExpression"
+"JeuDonnéesChronologiquesTâche","FR","Heure","746912","0","TaskTimephasedDataSet","Time","Heure","NAVIGATION","","","","",""
+"JeuDonnéesChronologiquesTâche","FR","Projet","746912","0","TaskTimephasedDataSet","Project","Projet","NAVIGATION","","","","",""
+"JeuDonnéesChronologiquesTâche","FR","Tâche","746912","0","TaskTimephasedDataSet","Task","Tâche","NAVIGATION","","","","",""
+"TaskTimephasedDataSet","EN","Project","746912","0","TaskTimephasedDataSet","Project","Projet","NAVIGATION","","","","",""
+"TaskTimephasedDataSet","EN","Task","746912","0","TaskTimephasedDataSet","Task","Tâche","NAVIGATION","","","","",""
+"TaskTimephasedDataSet","EN","Time","746912","0","TaskTimephasedDataSet","Time","Heure","NAVIGATION","","","","",""

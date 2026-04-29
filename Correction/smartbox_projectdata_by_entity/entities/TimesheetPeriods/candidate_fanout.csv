@@ -1,0 +1,7 @@
+﻿"EntityName_EN","Column_EN","CandidateRows","DistinctCandidateRows","ExactRows","HeuristicRows","NoMatchRows"
+"TimesheetPeriods","LCID","32","32","32","0","0"
+"TimesheetPeriods","Description","18","18","18","0","0"
+"TimesheetPeriods","PeriodId","5","5","0","5","0"
+"TimesheetPeriods","StartDate","5","5","5","0","0"
+"TimesheetPeriods","PeriodStatusId","4","4","4","0","0"
+"TimesheetPeriods","PeriodName","3","3","3","0","0"

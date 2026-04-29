@@ -1,0 +1,5 @@
+﻿"EntityName_EN","Column_EN","CandidateRows","DistinctCandidateRows","ExactRows","HeuristicRows","NoMatchRows"
+"BusinessDriverDepartments","DepartmentId","4","4","0","4","0"
+"BusinessDriverDepartments","DepartmentName","4","4","4","0","0"
+"BusinessDriverDepartments","BusinessDriverId","3","3","0","3","0"
+"BusinessDriverDepartments","BusinessDriverName","3","3","3","0","0"

@@ -1,0 +1,6 @@
+﻿"EntityName_EN","Column_EN","CandidateRows","DistinctCandidateRows","ExactRows","HeuristicRows","NoMatchRows"
+"TimesheetClasses","LCID","32","32","32","0","0"
+"TimesheetClasses","Description","18","18","18","0","0"
+"TimesheetClasses","DepartmentId","4","4","0","4","0"
+"TimesheetClasses","DepartmentName","4","4","4","0","0"
+"TimesheetClasses","TimesheetClassId","3","3","0","3","0"

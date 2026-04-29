@@ -682,8 +682,8 @@ USING (VALUES
     (N'TimesheetClasses',N'ClassesFeuilleTemps',  3,N'DepartmentName',    N'NomService',              N'src', N'src.DepartmentName',N'MAPPED'),
     (N'TimesheetClasses',N'ClassesFeuilleTemps',  4,N'Description',       N'Description',             N'src', N'src.Description',  N'MAPPED'),
     (N'TimesheetClasses',N'ClassesFeuilleTemps',  5,N'LCID',              N'LCID',                    N'src', N'src.LCID',          N'MAPPED'),
-    (N'TimesheetClasses',N'ClassesFeuilleTemps',  6,N'ClassName',         N'NomClasseFeuilleDeTemps', N'src', N'src.ClassName',     N'MAPPED'),
-    (N'TimesheetClasses',N'ClassesFeuilleTemps',  7,N'Type',              N'TypeClasseFeuilleDeTemps',N'src', N'src.Type',          N'MAPPED')
+    (N'TimesheetClasses',N'ClassesFeuilleTemps',  6,N'TimesheetClassName', N'NomClasseFeuilleDeTemps', N'src', N'src.ClassName',     N'MAPPED'),
+    (N'TimesheetClasses',N'ClassesFeuilleTemps',  7,N'TimesheetClassType', N'TypeClasseFeuilleDeTemps',N'src', N'src.Type',          N'MAPPED')
 ) AS src (EntityName_EN, EntityName_FR, ColumnPosition, Column_EN, Column_FR, SourceAlias, SourceExpression, MapStatus)
 ON tgt.EntityName_EN=src.EntityName_EN AND tgt.Column_EN=src.Column_EN
 WHEN NOT MATCHED THEN INSERT (EntityName_EN,EntityName_FR,ColumnPosition,Column_EN,Column_FR,SourceAlias,SourceExpression,MapStatus,IsPublished) VALUES(src.EntityName_EN,src.EntityName_FR,src.ColumnPosition,src.Column_EN,src.Column_FR,src.SourceAlias,src.SourceExpression,src.MapStatus,1)

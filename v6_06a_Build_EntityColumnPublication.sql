@@ -30,6 +30,7 @@
                   Phase G  : Timesheets jTP/jTST (ref externe) + colonnes EndDate/StartDate/Description/StatusDescription
                   Phase H  : TimeSet FiscalPeriodStart/Year → jFP (existant)
                   Phase I  : TimesheetClasses TimesheetClassId → src.ClassUID
+                  Phase I-bis : TimesheetClasses Description → src.Description (correction mauvais match pjpub)
                   Phase J  : jProject/jTask pour AssignmentBaselines, TaskBaselines, TaskTimephased, Deliverables, Issues, Risks, ProjectBaselines
                   Phase K  : jResource pour ResourceTimephasedDataSet, ResourceDemandTimephasedDataSet, EngagementsTimephasedDataSet
                   Phase L  : EngagementsTimephasedDataSet renommages OData/PSSE (src direct)
@@ -1414,6 +1415,26 @@ SET PsseColumnName   = N'ClassUID',
     UpdatedBy        = suser_sname()
 WHERE EntityName_EN = N'TimesheetClasses' AND Column_EN = N'TimesheetClassId' AND MapStatus <> N'MANUAL';
 
+/* --- E4 : Phase I-bis – TimesheetClasses : Description → src.Description ---
+   dic.EntityColumnMap mappe Description sur pjpub.MSP_DRIVER_IMPACT_STATEMENTS (EXACT, 90 objets)
+   car le nom "Description" existe dans plusieurs schémas. La source correcte est la source primaire :
+   pjrep.MSP_TimesheetClass_UserView.Description (alias src).
+*/
+UPDATE dic.EntityColumnPublication
+SET PsseSourceSchema = N'pjrep',
+    PsseSourceObject = N'MSP_TimesheetClass_UserView',
+    PsseColumnName   = N'Description',
+    SourceAlias      = N'src',
+    SourceExpression = N'src.[Description]',
+    MapStatus        = N'MAPPED',
+    IsPublished      = 1,
+    PublishedOn      = sysdatetime(),
+    UpdatedOn        = sysdatetime(),
+    UpdatedBy        = suser_sname()
+WHERE EntityName_EN = N'TimesheetClasses'
+  AND Column_EN     = N'Description'
+  AND MapStatus    <> N'MANUAL';
+
 /* --- E4 : Phase J – jProject / jTask pour entités baseline/timephased ---
    Entités avec ProjectUID direct → jProject.ProjectName
    Entités avec TaskUID direct    → jTask.TaskName
@@ -1912,7 +1933,7 @@ WHERE JoinStatus <> N'MANUAL'
       );
 
 DECLARE @E4Count int = @@ROWCOUNT;
-SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/J/K/L/M/N/O/P résolus.';
+SET @Msg = N'ETAPE E4 : toutes jointures dérivées insérées. Groups A/B/C + Phases G/H/I/I-bis/J/K/L/M/N/O/P résolus.';
 EXEC log.usp_WriteScriptLog
     @RunId=@RunId, @ScriptName=@ScriptName, @ScriptVersion=N'V6-DRAFT',
     @Phase=N'DERIVED_JOIN', @Severity=N'INFO', @Status=N'COMPLETED',
